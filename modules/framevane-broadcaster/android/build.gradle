@@ -1,0 +1,51 @@
+plugins {
+  id 'com.android.library'
+  // Supplies the compiler, the SDK levels, the Kotlin version and the
+  // expo-modules-core dependency that every Expo module is built against.
+  // Setting those by hand is how this module first failed to compile: an
+  // interpolated `kotlinVersion` resolved to a Kotlin newer than the one the
+  // app is compiled with, and the standard library it pulled in could not be
+  // read by the compiler that had to read it.
+  id 'expo-module-gradle-plugin'
+}
+
+/**
+ * RootEncoder (Apache 2.0) is the encoder and the RTMP/SRT stack.
+ *
+ * Held one minor behind the latest deliberately. 2.8.x pulls ktor-network
+ * 3.5.2, which needs kotlin-stdlib 2.3.21, and a Kotlin compiler reads class
+ * metadata only two minors back - Expo SDK 54 compiles with 2.1.20, so the
+ * standard library itself becomes unreadable and the build dies with dozens of
+ * `Unresolved reference 'let'`. Worse, it dies in Expo's own source files
+ * rather than ours, because Expo's autolinking puts every module's dependency
+ * graph on the `:expo` project's compile classpath.
+ *
+ * `node scripts/check-kotlin-window.mjs` walks the graph and says whether a
+ * version is inside the window. Run it before bumping this number; it answers
+ * in seconds what the build takes twenty minutes to say badly.
+ */
+def rootEncoderVersion = '2.7.0'
+
+group = 'de.linkfa.framevane.broadcaster'
+version = '0.1.0'
+
+android {
+  namespace "de.linkfa.framevane.broadcaster"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+repositories {
+  mavenCentral()
+  // RootEncoder publishes through JitPack, not Maven Central.
+  maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+  // The only maintained Android library that publishes BOTH protocols from one
+  // API with hardware encoding, adaptive bitrate and reconnect - which is the
+  // whole reason this module exists rather than a WebRTC wrapper.
+  implementation "com.github.pedroSG94.RootEncoder:library:$rootEncoderVersion"
+}

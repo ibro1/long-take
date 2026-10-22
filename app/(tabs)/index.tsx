@@ -1,0 +1,2478 @@
+import { useCameraPermissions, useMicrophonePermissions } from "expo-camera";
+import { useFocusEffect } from "@react-navigation/native";
+import { useKeepAwake } from "expo-keep-awake";
+import { useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Alert,
+  BackHandler,
+  Linking,
+  PermissionsAndroid,
+  Platform,
+  Pressable,
+  useWindowDimensions,
+  Vibration,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+import { BufferMeter } from "@/components/broadcast/buffer-meter";
+import type { LucideIcon } from "lucide-react-native";
+
+import { useImmersiveScreen } from "@/lib/immersive";
+import {
+  loadPreferences,
+  loadSettings,
+  recordQualityFor,
+  savePreferences,
+  QUICK_CONTROLS,
+  type QuickControl,
+} from "@/lib/broadcast/settings";
+import { BatteryBar } from "@/components/broadcast/battery";
+import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
+import { ExposureRail, type FocusPoint } from "@/components/broadcast/exposure-rail";
+import { EdgeRails, type Rail } from "@/components/broadcast/edge-rails";
+import { topBanner } from "@/lib/broadcast/banners";
+import { plainFailure } from "@/lib/broadcast/failure";
+import { guardFor, preflightGuards } from "@/lib/broadcast/guards";
+import { formatKbps } from "@/lib/broadcast/units";
+import { offerableInputs } from "@/lib/broadcast/inputs";
+import { levelSnapshot, noteRender, subscribeLevel } from "@/lib/broadcast/level-store";
+import {
+  Banner,
+  Chip,
+  ControlButton,
+  DestinationChip,
+  HUD_TEXT,
+  Panel,
+  ShutterButton,
+  Readout,
+  Row,
+  Toggle,
+} from "@/components/broadcast/chrome";
+import {
+  CameraIcon,
+  ChevronIcon,
+  CloseIcon,
+  FlipIcon,
+  GoLiveIcon,
+  GlobeIcon,
+  LogIcon,
+  MicIcon,
+  MicOffIcon,
+  MoreIcon,
+  OverlayIcon,
+  PauseIcon,
+  PhotoIcon,
+  RecordIcon,
+  ResumeIcon,
+  SettingsIcon,
+  ShapeIcon,
+  StatsIcon,
+  StopIcon,
+  TorchIcon,
+  TorchOffIcon,
+} from "@/components/broadcast/icons";
+import { LevelMeter } from "@/components/broadcast/level-meter";
+import { LogPanel } from "@/components/broadcast/log-panel";
+import { Mono } from "@/components/broadcast/mono";
+import { Notice } from "@/components/broadcast/notice";
+import { OverlaysPanel } from "@/components/broadcast/overlays-panel";
+import { OffAirOverlay, ReconnectingOverlay } from "@/components/broadcast/connection-overlay";
+import { StudioChip } from "@/components/broadcast/studio-chip";
+import { PausedOverlay } from "@/components/broadcast/paused-overlay";
+import { RecordPill } from "@/components/broadcast/record-pill";
+import { Stepper } from "@/components/broadcast/stepper";
+import { TouchLayer } from "@/components/broadcast/touch-layer";
+import { UpdateCard, useHostUpdatePrompt } from "@/components/updates/update-prompt";
+import { Button } from "@/components/ui/button";
+import { Text } from "@/components/ui/text";
+import { activeConnection, type Connection } from "@/lib/broadcast/connections";
+import { pushLog } from "@/lib/broadcast/log";
+import { endBroadcast } from "@/lib/broadcast/overlays";
+import { isSettled } from "@/lib/broadcast/studio-status";
+import { useHealthHeartbeat } from "@/lib/broadcast/useHealthHeartbeat";
+import { useStudioStatus } from "@/lib/broadcast/useStudioStatus";
+import { mark, tick } from "@/lib/haptics";
+import { applyLanguagePreference, bidi, type Language, t, textDir } from "@/lib/i18n";
+import { AWB_AUTO, formatUptime, useBroadcast } from "@/lib/broadcast/useBroadcast";
+import {
+  type AudioDevice,
+  BroadcasterView,
+  type CameraInfo,
+  type Orientation,
+} from "@/modules/framevane-broadcaster";
+
+/** Named apart from the Panel component: one is a box, this is which box. */
+/**
+ * Long enough to lift the phone and frame the shot, short enough that nobody
+ * presses it twice thinking it did not take. Three is what every camera timer
+ * settled on.
+ */
+const COUNTDOWN_SECONDS = 3;
+
+/**
+ * How loud counts as heard, on the 0-100 peak the level event carries.
+ *
+ * Speech sits around the middle of the meter, which the meter draws from the
+ * square root of this - so a voice at arm's length is well over 5, and a quiet
+ * room's hum is under it. The point is to catch a microphone that delivers
+ * nothing at all, the "every sample is silent" case, not to grade a voice.
+ */
+const HEARD_PEAK = 5;
+
+/**
+ * The two buzzes, as Android vibration patterns: wait, buzz, gap, buzz.
+ * Two short for a drop that is being dealt with; three long for one that is
+ * not, so the two can be told apart from a pocket without looking.
+ */
+const DROPPED_BUZZ = [0, 180, 120, 180];
+const GAVE_UP_BUZZ = [0, 500, 200, 500, 200, 500];
+
+/**
+ * Asks for the notification permission on the way to air, when the broadcast
+ * is going to need it.
+ *
+ * Background broadcasting is on by default now, so the settings toggle - the
+ * one place that used to ask - is never pressed by an operator who keeps the
+ * default. From Android 13 the service's notification is hidden without this
+ * permission, and a broadcast holding the camera behind a notification nobody
+ * can see or stop from is not one to start without asking. Asked here, after
+ * the check and before the countdown, because this is the moment the request
+ * plainly belongs to.
+ *
+ * A refusal does not stop the broadcast. The service still runs; only its
+ * notification is hidden, and the log says so for whoever reads it afterwards.
+ * Asking again on every go-live costs nothing once Android has stopped
+ * showing the dialog: the request then answers at once.
+ */
+async function askForBroadcastNotification(): Promise<void> {
+  if (Platform.OS !== "android" || Number(Platform.Version) < 33) return;
+  if (!loadPreferences().backgroundBroadcast) return;
+  try {
+    const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+    if (await PermissionsAndroid.check(permission)) return;
+    const result = await PermissionsAndroid.request(permission);
+    if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+      pushLog({
+        at: Date.now(),
+        level: "warn",
+        message:
+          "Notifications are not allowed, so the background broadcast runs without a notification to see or stop it from.",
+      });
+    }
+  } catch {
+    // A permission request that throws is not a reason to stay off air.
+  }
+}
+
+/**
+ * Below this the charge is worth showing; below the second it is worth
+ * colouring. Above it the number is just clutter on top of a picture - the
+ * phone's own status bar already carries it for anyone who wants it, and this
+ * screen is covered by the operator's hand often enough as it is.
+ */
+const LOW_BATTERY = 0.4;
+const CRITICAL_BATTERY = 0.15;
+
+type PanelId = "camera" | "shape" | "overlays" | "stats" | "log" | "mic" | "preflight" | null;
+
+/**
+ * How wide the landscape control column is. Fixed rather than proportional,
+ * and derived from its widest row: four 44px discs and the gaps between them,
+ * plus the column's own padding. A proportional width gets narrower on a
+ * narrower phone, and the discs do not - they just stop fitting, which is how
+ * the old layout ended up with controls off the edge of the screen.
+ */
+/**
+ * Hoisted because it is a prop on a native view. An object literal in the JSX
+ * is a new object on every render, so the camera view was handed a "changed"
+ * style every time anything on this screen moved - the uptime ticking, a
+ * bitrate arriving - and paid for a native style update each time.
+ */
+const FILL = { flex: 1 } as const;
+
+/**
+ * Wide enough for what is in it and no wider.
+ *
+ * Two 44px discs, the 8px between them and 12px of padding either side comes to
+ * 120. It was 224 - a number from when this column held four discs in a row
+ * with their labels under them - and every pixel past what the controls need is
+ * picture taken away from the shot.
+ */
+const COLUMN = 120;
+
+
+/** Enough of the frame kept clear of the column that a banner is not squeezed under it. */
+const COLUMN_CLEARANCE = "pr-[128px]";
+
+export default function BroadcastScreen() {
+  const router = useRouter();
+  const [camera, requestCamera] = useCameraPermissions();
+  const [microphone, requestMicrophone] = useMicrophonePermissions();
+  const [connection, setConnection] = useState<Connection | null>(null);
+  // The status bar and the navigation keys come off while this screen has
+  // focus. See lib/immersive.ts for why this is focus-driven and not a mount.
+  useImmersiveScreen();
+
+  // Dev-only: counts commits of this screen, reported once a second with the
+  // meter counters.
+  useEffect(() => {
+    noteRender();
+  });
+
+  const [moreOpen, setMoreOpen] = useState(false);
+  /**
+   * Which of the optional controls sit on the glass rather than behind More.
+   *
+   * Re-read whenever this screen comes back, because Settings is one tap away
+   * and both screens stay mounted - so a change made there would otherwise not
+   * show until the app was restarted.
+   */
+  const [glass, setGlass] = useState<QuickControl[]>(() => loadPreferences().quickAccess);
+  useFocusEffect(
+    useCallback(() => {
+      setGlass(loadPreferences().quickAccess);
+    }, []),
+  );
+  const [panel, setPanel] = useState<PanelId>(null);
+  const { width, height } = useWindowDimensions();
+  const {
+    state,
+    detail,
+    reconnects,
+    lastDrop,
+    lostAir,
+    dismissLostAir,
+    bitrate,
+    congested,
+    stalled,
+    dropped,
+    stats,
+    setStatsWatched,
+    uptime,
+    live,
+    muted,
+    cameras,
+    charge,
+    orientation,
+    start,
+    stop,
+    restart,
+    selectCamera,
+    setOrientation,
+    toggleMute,
+    onStatus,
+    onBitrate,
+    onLevel,
+    onCameras,
+    onAudioDevices,
+    audioInput,
+    audioDevices,
+    selectAudioInput,
+    capabilities,
+    zoom,
+    zoomRange,
+    setZoom,
+    autoFocus,
+    focusAt,
+    setAutoFocus,
+    exposure,
+    exposureLocked,
+    exposureRange,
+    setExposure,
+    setExposureLock,
+    focusDistance,
+    manualFocus,
+    setFocusDistance,
+    resumeAutoFocus,
+    whiteBalance,
+    setWhiteBalance,
+    noiseReduction,
+    setNoiseReduction,
+    antiFlicker,
+    setAntiFlicker,
+    stabilization,
+    setStabilization,
+    torch,
+    toggleTorch,
+    flipCamera,
+    paused,
+    pausedAt,
+    togglePause,
+    recording,
+    recordSeconds,
+    toggleRecording,
+    onRecord,
+    onThermal,
+    thermal,
+    usableBytes,
+    micSilence,
+    onAudioInterrupted,
+    restoreMicrophone,
+    takePhoto,
+    notice,
+    log,
+    onLog,
+  } = useBroadcast();
+
+  // The screen must not sleep mid-broadcast; a locked phone stops the preview
+  // and an operator who put it on a stand has not asked to go off air.
+  useKeepAwake();
+
+  /**
+   * Tells the studio how the phone is doing while it is live - heat, battery,
+   * the frame rate actually leaving it. Nothing here is shown on this screen:
+   * it is for whoever has to find out afterwards why a class went wrong.
+   */
+  useHealthHeartbeat({ connection, live, state, thermal, charge, stats, reconnects, lastDrop });
+
+  /**
+   * Asks the studio whether YouTube is actually on air, for the chip beside the
+   * uptime. The answer goes to a store the chip reads, not into this screen's
+   * state - see lib/broadcast/studio-status.ts.
+   */
+  useStudioStatus({ connection, live });
+
+  /**
+   * The language of the words on the glass, re-read on focus because it is
+   * chosen on the Settings tab. Held in state only so that a change re-renders
+   * this screen; the strings themselves come from `t`.
+   */
+  const [, setLanguage] = useState<Language>(() => applyLanguagePreference());
+  useFocusEffect(
+    useCallback(() => {
+      setLanguage(applyLanguagePreference());
+    }, []),
+  );
+
+  /**
+   * Re-read on every focus, not once on mount.
+   *
+   * The navigator was told to stop detaching inactive tabs - so that a tab
+   * change could not tear down the camera or end a broadcast - and the cost of
+   * that is this screen no longer being rebuilt when the operator comes back
+   * to it. Adding a destination and returning here left it still saying there
+   * was none.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      setConnection(activeConnection());
+    }, []),
+  );
+
+  // Only read the encoder's numbers while the panel showing them is open. It
+  // is already read on its own while live, for the head-up display.
+  useEffect(() => {
+    setStatsWatched(panel === "stats");
+  }, [panel, setStatsWatched]);
+
+  /**
+   * A few seconds between pressing and broadcasting.
+   *
+   * Going live is the one action on this screen that an audience sees
+   * immediately, and the moment just after pressing is exactly when an
+   * operator is still moving the phone into position. The count gives them
+   * that moment back, and gives anyone who pressed it by mistake a way out -
+   * the button becomes Cancel for as long as it is running.
+   */
+  const [counting, setCounting] = useState<number | null>(null);
+  const countdown = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /**
+   * The count itself, kept beside the state rather than read out of it.
+   *
+   * React is free to run a state updater more than once - in development it
+   * does, every time - and going live from inside one meant two startStream
+   * calls on one camera. So the updater does nothing but set a number, and the
+   * decision to start lives out here in the tick, which runs once.
+   */
+  const remaining = useRef(0);
+
+  const cancelCountdown = useCallback(() => {
+    if (countdown.current) clearInterval(countdown.current);
+    countdown.current = null;
+    remaining.current = 0;
+    setCounting(null);
+  }, []);
+
+  const beginCountdown = useCallback(
+    (destination: Connection) => {
+      if (countdown.current) return;
+      remaining.current = COUNTDOWN_SECONDS;
+      setCounting(COUNTDOWN_SECONDS);
+      countdown.current = setInterval(() => {
+        remaining.current -= 1;
+        if (remaining.current > 0) {
+          setCounting(remaining.current);
+          return;
+        }
+        // The last tick starts the broadcast rather than showing a zero
+        // nobody needs to read.
+        if (countdown.current) clearInterval(countdown.current);
+        countdown.current = null;
+        setCounting(null);
+        // Felt as well as seen: the phone is often already on its stand, and
+        // this is the moment the operator looks away from it to the class.
+        mark();
+        // `start` closes its own failures out onto the banner, which is why
+        // this can be fired and forgotten from a timer with nobody waiting.
+        void start(destination);
+      }, 1000);
+    },
+    [start],
+  );
+
+  // A countdown left running after the screen goes would start a broadcast
+  // nobody is watching for.
+  useEffect(() => () => cancelCountdown(), [cancelCountdown]);
+
+  /**
+   * And after the screen is merely left. The tabs stay mounted, so the unmount
+   * above never fires on a tab change - an operator who pressed Go live and
+   * then went to check the destination came back to a broadcast already on
+   * air, started by a count they had walked away from.
+   */
+  useFocusEffect(useCallback(() => () => cancelCountdown(), [cancelCountdown]));
+
+  /**
+   * Ending asks first.
+   *
+   * Every other control here is reversible in a second; this one is not - it
+   * drops the connection, and on platforms that end their event with the
+   * stream it cannot simply be picked up again. A system dialog rather than
+   * one of our panels because it has to be impossible to tap through by
+   * accident, which is the whole point.
+   */
+  const confirmEnd = useCallback(() => {
+    Alert.alert(
+      t("end.title"),
+      t("end.body"),
+      [
+        { text: t("end.keep"), style: "cancel" },
+        {
+          text: t("end.confirm"),
+          style: "destructive",
+          onPress: () => {
+            mark();
+            void (async () => {
+              /**
+               * The encoder first, so the studio is told by a phone that has
+               * already gone quiet: ending the run while this one is still
+               * publishing would have the ingest edge open a new broadcast a
+               * second later.
+               *
+               * But the studio is told whatever the encoder does. It used to
+               * be told only after a clean stop, so a stop that threw - or
+               * never came back - skipped the call without a word, and a
+               * finished class sat on YouTube as a live event with a spinner
+               * for the whole reconnect grace. A failed stop is logged and
+               * the end still goes out.
+               */
+              try {
+                await Promise.race([stop(), new Promise((resolve) => setTimeout(resolve, 8000))]);
+              } catch (error) {
+                pushLog({
+                  at: Date.now(),
+                  level: "warn",
+                  message: `The encoder did not stop cleanly: ${(error as Error)?.message ?? error}`,
+                });
+              }
+              if (!connection) return;
+              /**
+               * Tried a few times. The end of a class is often the worst
+               * signal of it, and a lost request here costs the channel five
+               * minutes of an empty live event.
+               */
+              let last = "";
+              for (const wait of [0, 2000, 5000]) {
+                if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+                const ended = await endBroadcast(connection);
+                if (ended.ok) {
+                  pushLog({ at: Date.now(), level: "info", message: "The studio ended the broadcast." });
+                  return;
+                }
+                last = ended.message;
+              }
+              pushLog({
+                at: Date.now(),
+                level: "warn",
+                message: `The studio could not be told the broadcast ended (${last}). It closes on its own within five minutes.`,
+              });
+            })();
+          },
+        },
+      ],
+    );
+  }, [stop, connection]);
+
+  /**
+   * The hardware back button, while live.
+   *
+   * Back on this screen leaves it, and leaving it is one step from the app
+   * going behind the launcher - which, for an operator who never turned on
+   * background broadcasting, used to be the end of the broadcast by a gesture
+   * nobody thinks of as ending anything. So while live it asks the same
+   * question the End button asks. An open panel or the overflow sheet is
+   * closed first, because that is what back means to everyone holding the
+   * phone at that moment. Off air, back does what it always does.
+   *
+   * Focus-scoped: the other tabs keep their own back behaviour.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      if (!live) return undefined;
+      const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+        if (moreOpen) {
+          setMoreOpen(false);
+          return true;
+        }
+        if (panel !== null) {
+          setPanel(null);
+          return true;
+        }
+        confirmEnd();
+        return true;
+      });
+      return () => subscription.remove();
+    }, [live, moreOpen, panel, confirmEnd]),
+  );
+
+  /**
+   * One buzz when the stream drops, and a longer one when it gives up.
+   *
+   * The operator of a phone on a stand is looking at the room, and a dropped
+   * connection drawn on a screen nobody is facing is a dropped connection
+   * nobody knows about until a viewer says so. Once per change, not per retry:
+   * the native side holds `reconnecting` for the whole of an outage, and a
+   * phone that buzzed on every attempt would be switched to silent within the
+   * first minute of one.
+   */
+  const previousState = useRef(state);
+  useEffect(() => {
+    const before = previousState.current;
+    previousState.current = state;
+    if (state === "reconnecting" && before !== "reconnecting") {
+      Vibration.vibrate(DROPPED_BUZZ);
+    }
+  }, [state]);
+
+  const previousLostAir = useRef(lostAir);
+  useEffect(() => {
+    if (lostAir && !previousLostAir.current) Vibration.vibrate(GAVE_UP_BUZZ);
+    previousLostAir.current = lostAir;
+  }, [lostAir]);
+
+  /**
+   * The check before going live.
+   *
+   * Two mistakes kept reaching the air: the wrong microphone - the phone's own
+   * instead of the Bluetooth headset the lessons are taught on - and a
+   * recording set to a size nobody meant. Both are visible on this screen if
+   * you know where to look, and neither is where anyone looks in the minute
+   * before a class. So GO LIVE now opens one panel that shows the three things
+   * worth a glance - the microphone, the picture going out, the copy on the
+   * phone - and checks what it can check itself rather than asking to be
+   * ticked. A list the operator ticks every time becomes a list they tap
+   * through; a panel that is quiet when all is well and speaks up about the
+   * one thing that is off does not.
+   */
+  const [usualMic, setUsualMic] = useState(() => loadPreferences().usualMic);
+  const [recordOnStart, setRecordOnStart] = useState(
+    () => loadPreferences().recordWhileStreaming,
+  );
+  const [recordHeight, setRecordHeight] = useState(() => loadPreferences().recordHeight);
+  const [heard, setHeard] = useState(false);
+  const inputInUse = audioDevices.find((device) => device.current) ?? null;
+
+  /**
+   * Read fresh each time the check opens. The viewfinder stays mounted behind
+   * the Settings tab, so a value read once at mount would show last week's
+   * choice after it was changed there.
+   */
+  useEffect(() => {
+    if (panel !== "preflight") return;
+    const preferences = loadPreferences();
+    setUsualMic(preferences.usualMic);
+    setRecordOnStart(preferences.recordWhileStreaming);
+    setRecordHeight(preferences.recordHeight);
+  }, [panel]);
+
+  /**
+   * Whether the microphone has actually been heard since the check opened.
+   *
+   * Starts over when the microphone changes: a headset switched in has not been
+   * heard just because the phone's own microphone was. The level store is read
+   * directly rather than through state, so the whole screen is not re-rendered
+   * eight times a second to find out one yes.
+   */
+  useEffect(() => {
+    if (panel !== "preflight") return;
+    setHeard(false);
+    const listen = () => {
+      if (levelSnapshot() >= HEARD_PEAK) setHeard(true);
+    };
+    listen();
+    return subscribeLevel(listen);
+  }, [panel, inputInUse?.id]);
+
+  /**
+   * The microphone the operator just tapped, until it is the one in use.
+   *
+   * The row's highlight follows the device actually recording, which is the
+   * honest readout - and a headset takes seconds to answer, so for those
+   * seconds the tap looked ignored and got tapped again. It says it is
+   * connecting instead, and lets go when the switch lands or after twelve
+   * seconds, by which time the native side has said what happened.
+   */
+  const [pendingMic, setPendingMic] = useState<number | null>(null);
+  useEffect(() => {
+    if (pendingMic === null) return;
+    if (audioDevices.some((device) => device.id === pendingMic && device.current)) {
+      setPendingMic(null);
+      return;
+    }
+    const timer = setTimeout(() => setPendingMic(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [pendingMic, audioDevices]);
+
+  const ready = camera?.granted && microphone?.granted;
+
+  /**
+   * The update card goes in this screen's banner column rather than floating
+   * over it. Only once the viewfinder is up: the permission screen has no
+   * column, and there the floating copy is the right one.
+   */
+  useHostUpdatePrompt(Boolean(ready));
+
+  /**
+   * Whether the answer is in yet, which is not the same as the answer being no.
+   *
+   * `useCameraPermissions` resolves asynchronously and returns null until it
+   * does. Treating null as "not granted" meant every launch rendered the
+   * "Framevane needs the camera" screen for a frame before flipping to the
+   * viewfinder - so an operator who granted these months ago was told they had
+   * not, briefly, every single time they opened the app.
+   */
+  const answered = camera !== null && microphone !== null;
+
+  /**
+   * Android stops showing the dialog after two refusals and answers every
+   * later request with a denial nobody saw. A screen whose only control is an
+   * Allow button that has silently stopped doing anything is a dead end, and
+   * the app is the camera - there is nothing else to use. So once the system
+   * will not ask again, the button stops pretending to and opens the one place
+   * the decision can still be changed.
+   */
+  const blocked =
+    (camera !== null && !camera.granted && !camera.canAskAgain) ||
+    (microphone !== null && !microphone.granted && !microphone.canAskAgain);
+
+  /**
+   * Landscape is not portrait reflowed, it is the other half of the job. A
+   * phone on a tripod shooting wide has a third of the vertical room, so the
+   * controls leave the bottom of the frame entirely and stand in a column down
+   * the trailing edge, under the hand already holding the phone - with the
+   * button that ends the broadcast at the bottom corner where the thumb rests.
+   * Portrait keeps its dock along the bottom, which is where a phone held
+   * upright puts the thumb.
+   */
+  const wide = width > height;
+
+  /**
+   * The last tap on the picture, which is where the exposure rail hangs.
+   *
+   * Kept here rather than in the touch layer because the rail has to be drawn
+   * above that layer to take its own drag, and the frame travels with the
+   * point so the rail can be kept inside the picture - in landscape the
+   * picture is not the whole screen.
+   *
+   * Above the permission gates with every other hook, not down beside the code
+   * that uses it: those gates return early, and a hook declared after them is
+   * a hook React counts on one render and not the next. That is what
+   * "rendered more hooks than during the previous render" means, and it took
+   * the screen down the moment the permission check answered.
+   */
+  /**
+   * The state of the phone itself, ranked into at most one thing to say.
+   *
+   * The take's size is estimated from how long it has been running rather than
+   * measured: the figure is only used against a floor that already carries
+   * 400 MB of slack, and stat-ing a growing file every fifteen seconds to
+   * refine a number that never needs refining is work for nothing.
+   */
+  const guard = useMemo(
+    () =>
+      guardFor({
+        thermal,
+        usableBytes,
+        battery: charge.level,
+        charging: charge.charging,
+        recordingBitrate: recordingBitrateOf(connection),
+        takeBytes: recording ? (recordSeconds * recordingBitrateOf(connection)) / 8 : 0,
+        recording,
+        live,
+      }),
+    [
+      thermal,
+      usableBytes,
+      charge.level,
+      charge.charging,
+      connection,
+      recording,
+      recordSeconds,
+      live,
+    ],
+  );
+
+  /**
+   * A guard the operator has put away, remembered as what it was warning
+   * about. A different condition, or the same one gone worse, is news again
+   * and comes back; the same one saying the same thing does not.
+   */
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const shownGuard = guard && `${guard.id}:${guard.tone}` !== dismissed ? guard : null;
+
+  /** The one banner drawn, out of everything that could be - see banners.ts. */
+  const shownBanner = topBanner({
+    // Not gated on `detail`, which it used to be: the native side reports
+    // `authError` with no detail at all, so a refused key drew nothing.
+    failure: lostAir || state === "failed" || state === "authError",
+    stall: stalled,
+    micSilence: micSilence !== null,
+    guard: shownGuard !== null,
+    congestion: congested && live && !stalled,
+  });
+
+  /**
+   * The one thing in here the app does rather than says.
+   *
+   * Closing the file is the whole point - an unfinished MP4 plays nowhere - and
+   * the guard's text says it is happening before it happens. The ref is what
+   * keeps it to once: the conditions that triggered it are still true on the
+   * next render, and a stop called in a loop would fight the recorder.
+   */
+  const acted = useRef(false);
+  useEffect(() => {
+    if (guard?.action !== "stopRecording") {
+      acted.current = false;
+      return;
+    }
+    if (acted.current || !recording) return;
+    acted.current = true;
+    void toggleRecording();
+  }, [guard, recording, toggleRecording]);
+
+  /**
+   * Which edge rail is open, if either. One at a time: two rails on one edge is
+   * a column the operator has to aim between, and the second would be over the
+   * picture.
+   */
+  const [rail, setRail] = useState<Rail>(null);
+
+  const [focusPoint, setFocusPoint] = useState<FocusPoint | null>(null);
+  const [focusFrame, setFocusFrame] = useState({ width: 0, height: 0 });
+  /**
+   * In landscape the picture is not the whole screen: the control column down
+   * the trailing edge sits over it, and a rail placed under that column is a
+   * knob that cannot be reached.
+   */
+  const railFrame = useMemo(
+    () =>
+      wide
+        ? { width: Math.max(0, focusFrame.width - COLUMN), height: focusFrame.height }
+        : focusFrame,
+    [wide, focusFrame],
+  );
+  const onTapPoint = useCallback(
+    (point: FocusPoint, frame: { width: number; height: number }) => {
+      setFocusPoint(point);
+      setFocusFrame(frame);
+    },
+    [],
+  );
+
+  // Nothing yet, rather than the wrong thing. The check takes a frame or two.
+  if (!answered) {
+    return <SafeAreaView className="flex-1 bg-background" />;
+  }
+
+  if (!ready) {
+    return (
+      <SafeAreaView className="flex-1 items-center justify-center gap-4 bg-background p-6">
+        <Text className="text-center text-lg font-semibold">
+          Framevane needs the camera and microphone
+        </Text>
+        <Text className="text-center text-muted-foreground">
+          Both are used only while you are broadcasting. Nothing is recorded on the phone unless you
+          press Record.
+        </Text>
+        {blocked ? (
+          <>
+            <Text className="text-center text-muted-foreground">
+              Android will not ask again from here. Turn Camera and Microphone on for Framevane
+              under Permissions, then come back.
+            </Text>
+            <Button onPress={() => void Linking.openSettings()}>
+              <Text>Open Android settings</Text>
+            </Button>
+          </>
+        ) : (
+          <Button
+            onPress={async () => {
+              await requestCamera();
+              await requestMicrophone();
+            }}
+          >
+            <Text>Allow</Text>
+          </Button>
+        )}
+      </SafeAreaView>
+    );
+  }
+
+  const canZoom = zoomRange.max > zoomRange.min;
+  const canExpose = exposureRange.max > exposureRange.min;
+
+  const whiteBalanceModes = capabilities?.whiteBalanceModes ?? [];
+  const noiseReductionModes = capabilities?.noiseReductionModes ?? [];
+  const antiFlickerModes = capabilities?.antiFlickerModes ?? [];
+  /**
+   * What the chip says. "Let Android choose" rather than a guess at which
+   * microphone that turned out to be: the phone has not said, and inventing a
+   * name here is how a screen comes to disagree with the sound going out.
+   */
+  const micLabel = shortAudioInput(audioInput);
+
+  /**
+   * What the picker offers, which is not everything the phone lists - see
+   * offerableInputs. An input this app cannot name is one it will not put in
+   * front of an operator about to teach.
+   */
+  const micChoices = offerableInputs(audioDevices);
+
+  /** The usual microphone, if it is plugged in or paired right now. */
+  const usualConnected = usualMic
+    ? (micChoices.find(
+        (device) => device.kind === usualMic.kind && device.name === usualMic.name,
+      ) ?? null)
+    : null;
+  const onUsualMic = Boolean(usualConnected?.current);
+  /**
+   * Silence alone is not a reason to look twice. Most operators open the
+   * check and press Go live without saying a word, and on the microphone they
+   * always use that silence means nothing - so "Not hearing anything yet" was
+   * an amber warning and the button said "Go live anyway" on nearly every
+   * broadcast, which taught everyone to ignore both. It counts when there is
+   * already a reason to doubt the input: muted, or not the usual one.
+   */
+  const micDoubtful = muted || (usualMic !== null && !onUsualMic);
+
+  /**
+   * The phone's own fitness to start, which the banners keep quiet about off
+   * air - see preflightGuards.
+   */
+  const fitness = preflightGuards({
+    thermal,
+    usableBytes,
+    battery: charge.level,
+    charging: charge.charging,
+    willRecord: recordOnStart,
+  });
+  const unfit = fitness.some((line) => line.tone === "bad");
+
+  const rememberUsualMic = (device: AudioDevice) => {
+    const next = { kind: device.kind, name: device.name };
+    savePreferences({ usualMic: next });
+    setUsualMic(next);
+  };
+
+  const toggleRecordOnStart = () => {
+    const next = !recordOnStart;
+    savePreferences({ recordWhileStreaming: next });
+    setRecordOnStart(next);
+  };
+
+  const goLiveFromCheck = async () => {
+    if (!connection) return;
+    setPanel(null);
+    await askForBroadcastNotification();
+    beginCountdown(connection);
+  };
+
+
+  /**
+   * How far off the bottom the microphone chip sits.
+   *
+   * The column it hangs from is the whole screen, safe areas included, so ten
+   * points off the bottom put it on the gesture bar - close enough to the edge
+   * that reaching for it means reaching past the thing that closes the app.
+   *
+   * A number rather than the real inset, deliberately. `useSafeAreaInsets`
+   * needs a SafeAreaProvider above it and this app has none - it uses the
+   * library's SafeAreaView, which reads the native insets itself and needs no
+   * provider. The hook returned undefined and took the whole screen down with
+   * it. Forty-four clears every gesture bar this app has met, and adding a
+   * provider at the root to gain a few points of precision is not a change to
+   * make while moving a chip.
+   */
+  const micBottom = 44;
+
+  const closePanel = () => setPanel(null);
+  const togglePanel = (id: Exclude<PanelId, null>) => setPanel(panel === id ? null : id);
+
+  /**
+   * Off air with nowhere to send it, the primary button goes and fetches the
+   * missing piece rather than sitting there greyed out. A disabled button is a
+   * dead end, and "no destination" is a question with one obvious answer.
+   */
+
+  const primary = !connection
+    ? {
+        mode: "blocked" as const,
+        // Short enough to be drawn in the circle, so the eye and a screen
+        // reader are told the same thing.
+        label: t("primary.setUp"),
+        icon: GoLiveIcon,
+        onPress: () => router.push("/(tabs)/connections"),
+      }
+    : counting !== null
+      ? { mode: "stop" as const, label: t("primary.cancel"), icon: CloseIcon, onPress: cancelCountdown }
+      : live
+        ? { mode: "stop" as const, label: t("primary.end"), icon: StopIcon, onPress: confirmEnd }
+        : state === "connecting"
+          ? {
+              mode: "stop" as const,
+              label: t("primary.cancel"),
+              icon: CloseIcon,
+              // Pressed from a button with nobody awaiting it, so a stop that
+              // throws has to be caught here or it is an unhandled rejection.
+              onPress: () => {
+                stop().catch((error: unknown) => {
+                  pushLog({
+                    at: Date.now(),
+                    level: "warn",
+                    message: `Cancelling the connection did not stop cleanly: ${
+                      (error as Error)?.message ?? error
+                    }`,
+                  });
+                });
+              },
+            }
+          : {
+              mode: "start" as const,
+              label: t("primary.goLive"),
+              icon: GoLiveIcon,
+              // The check first; its own Go live starts the countdown.
+              onPress: () => setPanel("preflight"),
+            };
+
+  /**
+   * Four ways in, not one gear with tabs behind it.
+   *
+   * Larix's single gear is tidier, but it puts every camera control two taps
+   * and a guess away, and the shape of the broadcast is the thing an operator
+   * most often gets wrong in the last ten seconds before going live. Four
+   * labelled discs cost one row and keep everything one tap from the
+   * viewfinder, which is the rule this screen is held to.
+   *
+   * They stay the small size in both orientations. These are the controls
+   * touched before going live rather than during, and a smaller target is how
+   * that rank is shown without moving them off the glass.
+   */
+  /**
+   * The readouts on the trailing side: the shape going out, the charge, and
+   * what is actually leaving while live.
+   *
+   * Placed rather than fixed, because where they belong depends on the shape of
+   * the screen. A 16:9 picture on a 20:9 phone leaves a black margin down each
+   * side in landscape, and these used to be pushed off that margin and onto the
+   * picture - spending frame in order to leave the margin empty. In portrait
+   * the picture fills the width, there is no margin to use, and the top is
+   * where they go.
+   */
+  const statusChips = (
+    <>
+      {/* The shape and the charge read as one line, because they answer the
+          same question - whether this phone is in a state to broadcast - and
+          stacking them put a second row over the picture to say so. */}
+      <View className="flex-row flex-wrap items-center justify-end gap-1.5">
+        {/*
+          Always, not only when it is low.
+          
+          It used to appear below fifteen percent or on charge, on the reasoning
+          that a healthy battery is not news. It is: an operator deciding
+          whether to start a two-hour lesson is asking exactly this question,
+          and the answer arriving only once the answer is bad is the answer
+          arriving too late. What the state changes is the emphasis, not
+          whether it is there at all.
+        */}
+        <Chip tone={charge.level <= CRITICAL_BATTERY && !charge.charging ? "warn" : "plain"}>
+          <BatteryBar level={charge.level} charging={charge.charging} />
+          <Mono className="text-xs">
+            {charge.charging ? "⚡ " : ""}
+            {Math.round(charge.level * 100)}%
+          </Mono>
+        </Chip>
+
+        {connection ? (
+          <Chip>
+            <Mono className="text-xs">
+              {connection.height}p · {connection.fps} fps
+            </Mono>
+          </Chip>
+        ) : null}
+
+        {/* The rail this was set on leaves after a few seconds, and a held
+            exposure that nothing on screen admits to is how a shot ends up
+            two stops dark with no explanation. */}
+        {exposureLocked ? (
+          <Chip tone="warn">
+            <Text
+              maxFontSizeMultiplier={HUD_TEXT}
+              className="text-xs font-semibold uppercase tracking-wide text-white"
+            >
+              AE-L
+            </Text>
+          </Chip>
+        ) : null}
+      </View>
+
+      {/* Only what is going wrong. The rate itself moved to the state chip;
+          frames that never left are a fault and keep their place. */}
+      {live && (congested || dropped > 0) ? (
+        <Chip tone="warn">
+          {stats ? (
+            <Mono className="text-xs">{t("hud.fpsOut", { fps: stats.measuredFps })}</Mono>
+          ) : null}
+          {dropped > 0 ? <Mono className="text-xs">{t("hud.dropped", { count: dropped })}</Mono> : null}
+        </Chip>
+      ) : null}
+    </>
+  );
+
+  /**
+   * One description per optional control, used in both places it can appear.
+   *
+   * A control is either a disc on the glass or a row behind More, and which one
+   * is the operator's choice - so the name, the glyph and the action are
+   * written once here rather than twice, where the two copies would drift and
+   * the same button would end up called different things in different places.
+   */
+  const CONTROL: Record<
+    QuickControl,
+    {
+      icon: LucideIcon;
+      label: string;
+      hint: string;
+      on?: boolean;
+      tone?: "alert" | "warn";
+      /** The label already names the state, so "selected" is not said on top. */
+      labelCarriesState?: boolean;
+      onPress: () => void;
+    }
+  > = {
+    camera: {
+      icon: CameraIcon,
+      label: t("control.camera"),
+      hint: t("control.cameraHint"),
+      on: panel === "camera",
+      onPress: () => togglePanel("camera"),
+    },
+    shape: {
+      icon: ShapeIcon,
+      label: t("control.shape"),
+      hint: t("control.shapeHint"),
+      on: panel === "shape",
+      onPress: () => togglePanel("shape"),
+    },
+    overlays: {
+      // Offered whether or not this destination has a compositor behind it: an
+      // operator wondering where the overlays went is owed the answer, and the
+      // panel itself is the one line that explains it.
+      icon: OverlayIcon,
+      label: t("control.overlays"),
+      hint: t("control.overlaysHint"),
+      on: panel === "overlays",
+      onPress: () => togglePanel("overlays"),
+    },
+    stats: {
+      icon: StatsIcon,
+      label: t("control.stats"),
+      hint: t("control.statsHint"),
+      on: panel === "stats",
+      onPress: () => togglePanel("stats"),
+    },
+    log: {
+      icon: LogIcon,
+      label: t("control.log"),
+      hint: t("control.logHint"),
+      on: panel === "log",
+      onPress: () => togglePanel("log"),
+    },
+    record: {
+      // Named for what pressing it does, not for what it is. A row that still
+      // says "Record" while a recording is running reads as the way to start
+      // one, and the way to stop is then nowhere on the screen.
+      icon: recording ? StopIcon : RecordIcon,
+      label: recording ? t("control.stopRecording") : t("control.record"),
+      hint: recording ? t("control.stopRecordingHint") : t("control.recordHint"),
+      on: recording,
+      tone: "alert",
+      labelCarriesState: true,
+      onPress: () => {
+        tick();
+        void toggleRecording();
+      },
+    },
+    photo: {
+      icon: PhotoIcon,
+      label: t("control.photo"),
+      hint: t("control.photoHint"),
+      onPress: takePhoto,
+    },
+    pause: {
+      // The one control whose glyph shows the next action rather than the
+      // state, because that is what every transport control on earth does and
+      // the frame already carries an amber border saying PAUSED.
+      icon: paused ? ResumeIcon : PauseIcon,
+      // The label names the state, like Mute: "Pause, selected" left a
+      // listener to work out whether the broadcast was held.
+      label: paused ? t("control.paused") : t("control.pause"),
+      hint: t("control.pauseHint"),
+      on: paused,
+      labelCarriesState: true,
+      tone: "warn",
+      onPress: togglePause,
+    },
+    flip: {
+      icon: FlipIcon,
+      label: t("control.flip"),
+      hint: t("control.flipHint"),
+      onPress: flipCamera,
+    },
+  };
+
+  const onGlass = QUICK_CONTROLS.filter((id) => glass.includes(id));
+
+  /**
+   * Two groups, because the redesign puts them in two places.
+   *
+   * The shutter is flanked by what is reached for mid-shot - mute, torch, and
+   * the transport - while the panels and the shutter's quieter neighbours sit
+   * in a smaller row above it with Settings and the overflow. A camera app is
+   * laid out by how urgently a control is wanted, not by what kind of thing it
+   * is.
+   */
+  const FLANKING: QuickControl[] = ["pause", "flip"];
+  const flankIds = onGlass.filter((id) => FLANKING.includes(id));
+  const secondaryIds = onGlass.filter((id) => !FLANKING.includes(id));
+
+  const tileFor = (id: QuickControl, size: "sm" | "md", showLabel = true) => {
+    const control = CONTROL[id];
+    return (
+      <ControlButton
+        key={id}
+        icon={control.icon}
+        label={control.label}
+        labelCarriesState={control.labelCarriesState}
+        showLabel={showLabel}
+        size={size}
+        on={control.on}
+        tone={control.tone}
+        onPress={control.onPress}
+      />
+    );
+  };
+
+  /** Settings, the overflow, and whatever panels the operator keeps out here. */
+  const secondaryRow = (
+    <>
+      <ControlButton
+        icon={SettingsIcon}
+        label={t("control.settings")}
+        size="sm"
+        onPress={() => router.push("/(tabs)/settings")}
+      />
+      {secondaryIds.map((id) => tileFor(id, "sm"))}
+      <ControlButton
+        icon={MoreIcon}
+        label={t("control.more")}
+        size="sm"
+        on={moreOpen || panel !== null}
+        onPress={() => setMoreOpen(true)}
+      />
+    </>
+  );
+
+  /** The rest, as rows with room for a label and a line of explanation. */
+  const moreItems: MoreItem[] = [
+    ...QUICK_CONTROLS.filter((id) => !glass.includes(id)).map((id) => ({
+      icon: CONTROL[id].icon,
+      label: CONTROL[id].label,
+      hint: CONTROL[id].hint,
+      on: CONTROL[id].on,
+      onPress: CONTROL[id].onPress,
+    })),
+    {
+      icon: GlobeIcon,
+      label: t("control.destinations"),
+      hint: connection?.name ?? t("control.nowhere"),
+      onPress: () => router.push("/(tabs)/connections"),
+    },
+  ];
+
+  /** Mute, with the tick that says it took. Used by every mute on this screen. */
+  const muteWithTick = () => {
+    tick();
+    void toggleMute();
+  };
+
+  /**
+   * Mute and torch flank the primary button: they are the two things reached
+   * for without looking away from the picture. Muted is red and slashed
+   * because silence going out is a fault, not a preference; the torch is amber
+   * when it is burning because that is what it looks like.
+   */
+  const stateTiles = (
+    <>
+      {/* Named for its state - "Mute", "Muted" - and not "Mic": the chip that
+          picks the input is the microphone, and two controls with one name
+          had operators changing the input when they meant to mute. */}
+      <ControlButton
+        icon={muted ? MicOffIcon : MicIcon}
+        label={muted ? t("control.muted") : t("control.mute")}
+        labelCarriesState
+        showLabel={!wide}
+        size={wide ? "sm" : "md"}
+        on={muted}
+        tone="alert"
+        onPress={muteWithTick}
+      />
+      {/* The torch keeps its place on a camera that has none, so the button
+          that ends the broadcast never moves under a thumb. */}
+      {capabilities?.torch ? (
+        <ControlButton
+          icon={torch ? TorchIcon : TorchOffIcon}
+          label={t("control.torch")}
+          spoken={torch ? t("control.torchOn") : t("control.torchOff")}
+          toggle
+          showLabel={!wide}
+          size={wide ? "sm" : "md"}
+          on={torch}
+          tone="warn"
+          onPress={toggleTorch}
+        />
+      ) : (
+        <View className={wide ? "h-11 w-11" : "h-14 w-14"} />
+      )}
+    </>
+  );
+
+  /**
+   * The landscape panel's controls: icons only, laid out two to a row.
+   *
+   * An array rather than a fragment, because the rows are built from it in
+   * pairs. Wrapping was doing that job before and doing it loosely - the break
+   * landed wherever the box ran out, and the row spacing came from whatever
+   * flex had left over rather than from a number.
+   */
+  const landscapeItems = [
+    <ControlButton
+      key="settings"
+      icon={SettingsIcon}
+      label={t("control.settings")}
+      showLabel={false}
+      size="sm"
+      onPress={() => router.push("/(tabs)/settings")}
+    />,
+    ...secondaryIds.map((id) => tileFor(id, "sm", false)),
+    <ControlButton
+      key="mic"
+      icon={muted ? MicOffIcon : MicIcon}
+      label={muted ? t("control.muted") : t("control.mute")}
+      labelCarriesState
+      showLabel={false}
+      size="sm"
+      on={muted}
+      tone="alert"
+      onPress={muteWithTick}
+    />,
+    ...(capabilities?.torch
+      ? [
+          <ControlButton
+            key="torch"
+            icon={torch ? TorchIcon : TorchOffIcon}
+            label={t("control.torch")}
+            spoken={torch ? t("control.torchOn") : t("control.torchOff")}
+            toggle
+            showLabel={false}
+            size="sm"
+            on={torch}
+            tone="warn"
+            onPress={toggleTorch}
+          />,
+        ]
+      : []),
+    ...flankIds.map((id) => tileFor(id, "sm", false)),
+  ];
+
+  const landscapeRows: React.ReactNode[][] = [];
+  for (let i = 0; i < landscapeItems.length; i += 2) {
+    landscapeRows.push(landscapeItems.slice(i, i + 2));
+  }
+
+  const panelBody =
+    panel === null ? null : panel === "log" ? (
+      <LogPanel entries={log} onClose={closePanel} />
+    ) : panel === "camera" ? (
+      <Panel title="Camera" onClose={closePanel}>
+        {cameras.length === 0 ? (
+          <Text className="text-sm text-white/70">The phone has not reported its cameras.</Text>
+        ) : (
+          cameras.map((entry) => (
+            <Row
+              key={entry.id}
+              label={describeCamera(entry)}
+              selected={entry.current}
+              onPress={() => selectCamera(entry.id)}
+            />
+          ))
+        )}
+        <Text className="text-xs text-white/70">
+          A camera plugged in over USB appears here on its own.
+        </Text>
+
+        {capabilities?.available ? (
+          <>
+            <Toggle
+              label="Auto focus"
+              hint={
+                autoFocus ? "Tap the picture to focus somewhere else" : "Focus is held where you tapped"
+              }
+              on={autoFocus}
+              onPress={() => setAutoFocus(!autoFocus)}
+            />
+
+            {canZoom ? (
+              /* An action, so it says what it does. It read "Zoom · 2.4x" and
+                 reset the zoom on a tap with nothing on screen saying it would. */
+              <Row
+                label={`Reset zoom to ${zoomRange.min.toFixed(1)}×`}
+                hint={`Now ${zoom.toFixed(1)}× · pinch to zoom`}
+                selected={false}
+                onPress={() => setZoom(zoomRange.min)}
+              />
+            ) : null}
+
+            {canExpose ? (
+              <Stepper
+                label="Exposure"
+                value={exposure}
+                min={exposureRange.min}
+                max={exposureRange.max}
+                evStep={exposureRange.evStep}
+                locked={exposureLocked}
+                canLock={exposureRange.lockAvailable}
+                onChange={setExposure}
+                onLock={setExposureLock}
+              />
+            ) : null}
+
+            {/* Offered because the camera has it; on or off because the camera
+                says it is. */}
+            {capabilities.stabilization ? (
+              <Toggle
+                label="Stabilisation"
+                hint="Steadier handheld, a slightly tighter picture"
+                on={stabilization}
+                onPress={() => setStabilization(!stabilization)}
+              />
+            ) : null}
+
+            {/* Only worth a list when the camera has more than auto to offer;
+                one entry is a control that does nothing. */}
+            {whiteBalanceModes.length > 1 ? (
+              <>
+                <Text className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/70">
+                  White balance
+                </Text>
+                {whiteBalanceModes.map((mode) => (
+                  <Row
+                    key={mode}
+                    label={describeWhiteBalance(mode)}
+                    selected={whiteBalance === mode}
+                    onPress={() => setWhiteBalance(mode)}
+                  />
+                ))}
+              </>
+            ) : null}
+
+            {/* Same rule: a lens reporting one mode has no choice to offer. */}
+            {antiFlickerModes.length > 1 ? (
+              <>
+                <Text className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/70">
+                  Anti-flicker
+                </Text>
+                {antiFlickerModes.map((mode) => (
+                  <Row
+                    key={mode}
+                    label={describeAntiFlicker(mode)}
+                    selected={antiFlicker === mode}
+                    onPress={() => setAntiFlicker(mode)}
+                  />
+                ))}
+                <Text className="pb-1 text-xs text-white/70">
+                  Mains lighting flickers at twice the supply frequency, and a sensor out of step
+                  with it bands the picture. It cannot be fixed afterwards.
+                </Text>
+              </>
+            ) : null}
+
+            {noiseReductionModes.length > 1 ? (
+              <>
+                <Text className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/70">
+                  Noise reduction
+                </Text>
+                {noiseReductionModes.map((mode) => (
+                  <Row
+                    key={mode}
+                    label={describeNoiseReduction(mode)}
+                    selected={noiseReduction === mode}
+                    onPress={() => setNoiseReduction(mode)}
+                  />
+                ))}
+              </>
+            ) : null}
+          </>
+        ) : (
+          <Text className="text-xs text-white/70">
+            The camera's own controls appear once it is open.
+          </Text>
+        )}
+      </Panel>
+    ) : panel === "overlays" ? (
+      <OverlaysPanel connection={connection} onClose={closePanel} />
+    ) : panel === "mic" ? (
+      <Panel title="Where the sound comes from" onClose={closePanel}>
+        <Row
+          label="Let Android choose"
+          selected={audioDevices.every((device) => !device.current)}
+          onPress={() => void selectAudioInput(-1)}
+        />
+        {micChoices.map((device) => (
+          <Row
+            key={device.id}
+            label={
+              pendingMic === device.id && !device.current
+                ? `${describeAudioInput(device)} - connecting…`
+                : describeAudioInput(device)
+            }
+            selected={device.current}
+            onPress={() => {
+              setPendingMic(device.id);
+              void selectAudioInput(device.id);
+            }}
+          />
+        ))}
+        {micChoices.length === 0 ? (
+          <Text className="pt-1 text-xs text-white/70">
+            Nothing to list. The microphone has not been opened yet.
+          </Text>
+        ) : null}
+        {/*
+          Said here rather than discovered mid-lesson. Moving a live recording
+          to another microphone is Android's decision, not this app's: it will
+          do it for the phone's own inputs and it will not stop a broadcast to
+          do it for a headset, whose audio link has to be built first.
+        */}
+        <Text className="pt-1 text-xs text-white/70">
+          {live || recording
+            ? "While this is running the phone may refuse to move - a refusal is kept and used from the next broadcast."
+            : "Changes now. A Bluetooth headset takes a few seconds to answer, and the meter keeps reading the old microphone until it does."}
+        </Text>
+      </Panel>
+    ) : panel === "preflight" && connection ? (
+      <Panel
+        title={t("preflight.title")}
+        tall
+        onClose={closePanel}
+        footer={
+          /*
+            Never a wall, and never out of reach. Every warning above can be
+            exactly what the operator wants tonight - a borrowed microphone, a
+            deliberate 360p - so the button changes its word rather than
+            refusing. Pinned below the checks so it is in view without a
+            scroll, however many of them there are.
+          */
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={micDoubtful || unfit ? t("preflight.goLiveAnyway") : t("preflight.goLive")}
+            onPress={goLiveFromCheck}
+            className="items-center rounded-xl bg-red-600 py-3"
+          >
+            <Text className="text-base font-semibold text-white">
+              {micDoubtful || unfit ? t("preflight.goLiveAnyway") : t("preflight.goLive")}
+            </Text>
+          </Pressable>
+        }
+      >
+        {/* The microphone first: it is the mistake that reached the air. */}
+        <Text style={textDir()} className="text-xs font-semibold uppercase tracking-wide text-white/70">
+          {t("preflight.microphone")}
+        </Text>
+        <Text style={textDir()} className="text-sm text-white">
+          {inputInUse ? describeAudioInput(inputInUse) : t("preflight.androidMic")}
+        </Text>
+
+        {muted ? (
+          <>
+            <CheckLine tone="warn">{t("preflight.muted")}</CheckLine>
+            <Row label={t("preflight.unmute")} selected={false} onPress={muteWithTick} />
+          </>
+        ) : null}
+
+        {usualMic ? (
+          onUsualMic ? (
+            <CheckLine tone="ok">{t("preflight.usual")}</CheckLine>
+          ) : usualConnected ? (
+            <>
+              <CheckLine tone="warn">{t("preflight.usualConnected", { name: usualMic.name })}</CheckLine>
+              <Row
+                label={t("preflight.switchTo", { name: usualMic.name })}
+                selected={false}
+                onPress={() => void selectAudioInput(usualConnected.id)}
+              />
+            </>
+          ) : (
+            <CheckLine tone="warn">{t("preflight.usualMissing", { name: usualMic.name })}</CheckLine>
+          )
+        ) : (
+          <Text style={textDir()} className="text-xs text-white/70">
+            {t("preflight.tellUsual")}
+          </Text>
+        )}
+
+        {inputInUse && !onUsualMic ? (
+          <Row
+            label={usualMic ? t("preflight.makeUsualInstead") : t("preflight.makeUsual")}
+            selected={false}
+            onPress={() => rememberUsualMic(inputInUse)}
+          />
+        ) : null}
+
+        {heard ? (
+          <CheckLine tone="ok">{t("preflight.heard")}</CheckLine>
+        ) : (
+          <CheckLine tone={micDoubtful ? "warn" : "info"}>{t("preflight.notHeard")}</CheckLine>
+        )}
+
+        {/* The phone, before the picture: a phone too hot or too flat to last
+            the class is the one thing here that no setting below can fix. */}
+        {fitness.length > 0 ? (
+          <>
+            <Text
+              style={textDir()}
+              className="pt-2 text-xs font-semibold uppercase tracking-wide text-white/70"
+            >
+              {t("preflight.thisPhone")}
+            </Text>
+            {fitness.map((line) => (
+              <CheckLine key={`${line.id}:${line.tone}`} tone={line.tone === "bad" ? "bad" : "warn"}>
+                {line.text}
+              </CheckLine>
+            ))}
+          </>
+        ) : null}
+
+        <Text style={textDir()} className="pt-2 text-xs font-semibold uppercase tracking-wide text-white/70">
+          {t("preflight.goingOut")}
+        </Text>
+        {/* Directed by the destination's name, not by the language: it is the
+            one part of the line somebody typed, and an Arabic name is what
+            otherwise lands with its punctuation at the wrong end. */}
+        <Text style={bidi(connection.name) ?? textDir()} className="text-sm text-white">
+          {t("preflight.picture", {
+            height: connection.height,
+            fps: connection.fps,
+            rate: formatKbps(connection.videoBitrate),
+            name: connection.name,
+          })}
+        </Text>
+        <Row
+          label={t("preflight.changePicture")}
+          selected={false}
+          onPress={() => {
+            setPanel(null);
+            router.push("/(tabs)/connections");
+          }}
+        />
+
+        <Text style={textDir()} className="pt-2 text-xs font-semibold uppercase tracking-wide text-white/70">
+          {t("preflight.copy")}
+        </Text>
+        <Toggle
+          label={t("preflight.recordToo")}
+          hint={
+            recordOnStart
+              ? t("preflight.recordOn", {
+                  quality:
+                    recordQualityFor(recordHeight).height === 0
+                      ? t("preflight.sameAsBroadcast", { height: connection.height })
+                      : recordQualityFor(recordHeight).label,
+                })
+              : t("preflight.recordOff")
+          }
+          on={recordOnStart}
+          onPress={toggleRecordOnStart}
+        />
+        {/*
+          A different size is a second video encoder. The recording and the
+          stream are encoded separately whenever their sizes differ, and two
+          encoders plus the camera are what heat a phone until it throttles -
+          at which point the whole app slows, the controls included. Said here
+          because it is a choice made once in Settings and then forgotten.
+        */}
+        {recordOnStart &&
+        recordQualityFor(recordHeight).height !== 0 &&
+        recordQualityFor(recordHeight).height !== connection.height ? (
+          <CheckLine tone="warn">
+            {t("preflight.secondEncoder", {
+              quality: recordQualityFor(recordHeight).label,
+              height: connection.height,
+            })}
+          </CheckLine>
+        ) : null}
+        {recordOnStart ? (
+          <Row
+            label={t("preflight.changeRecording")}
+            selected={false}
+            onPress={() => {
+              setPanel(null);
+              router.push("/(tabs)/settings");
+            }}
+          />
+        ) : null}
+
+      </Panel>
+    ) : panel === "shape" ? (
+      <Panel title="Shape of the broadcast" onClose={closePanel}>
+        {(["auto", "portrait", "landscape"] as Orientation[]).map((mode) => (
+          <Row
+            key={mode}
+            label={
+              mode === "auto"
+                ? "However the phone is held"
+                : mode === "portrait"
+                  ? "Portrait - tall"
+                  : "Landscape - wide"
+            }
+            selected={orientation === mode}
+            onPress={() => setOrientation(mode)}
+          />
+        ))}
+        <Text className="pt-1 text-xs text-white/70">
+          Set this before going live. A stream that changes shape halfway through gets letterboxed by
+          every platform downstream.
+        </Text>
+      </Panel>
+    ) : (
+      <Panel title="What the encoder is doing" onClose={closePanel}>
+        <Readout label="Picture" value={stats ? `${stats.width}x${stats.height}` : "-"} />
+        <Readout
+          label={live ? "Frame rate out" : "Frame rate"}
+          value={
+            stats
+              ? live
+                ? `${stats.measuredFps} fps · ${stats.fps} asked for`
+                : `${stats.fps} fps asked for`
+              : "-"
+          }
+        />
+        <Readout label="Codec" value={stats ? stats.codec.toUpperCase() : "-"} />
+        <Readout
+          label="Target bitrate"
+          value={stats ? formatKbps(stats.bitrate) : "-"}
+        />
+        <Readout label="Going out" value={live ? formatKbps(bitrate) : "nothing"} />
+        {stats ? <BufferMeter items={stats.queueItems} capacity={stats.queueCapacity} /> : null}
+        <Readout
+          label="Dropped"
+          value={
+            stats ? `${stats.droppedVideoFrames} video · ${stats.droppedAudioFrames} audio` : "-"
+          }
+        />
+        <Readout
+          label="Sent"
+          value={
+            stats
+              ? `${(stats.bytesSent / 1_000_000).toFixed(1)} MB · ${stats.sentVideoFrames} frames`
+              : "-"
+          }
+        />
+        {/* The encoder's own answer, not ours - which is the point of reading it
+            back when the two disagree. */}
+        <Readout label="Recorder" value={stats ? (stats.recording ? "recording" : "off") : "-"} />
+        <Readout
+          label="Outgoing picture"
+          value={stats ? (stats.videoMuted ? "held" : "moving") : "-"}
+        />
+      </Panel>
+    );
+
+  return (
+    <View className="flex-1 bg-black">
+      <BroadcasterView
+        style={FILL}
+        onStatus={onStatus}
+        onBitrate={onBitrate}
+        onLevel={onLevel}
+        onCameras={onCameras}
+        onAudioDevices={onAudioDevices}
+        onRecord={onRecord}
+        onAudioInterrupted={onAudioInterrupted}
+        onThermal={onThermal}
+        onLog={onLog}
+      />
+
+      {/* Between the picture and the chrome, so pinch and tap reach the camera
+          while every button drawn after this still takes its own press. The
+          overlays that follow are all box-none, so the picture keeps the whole
+          frame apart from the discs themselves. */}
+      <TouchLayer
+        canZoom={canZoom}
+        /* An open panel covers the picture, so a tap on it is aimed at the
+           panel and not at something to focus on behind it. */
+        canFocus={(capabilities?.available ?? false) && panel === null}
+        zoom={zoom}
+        range={zoomRange}
+        onZoom={setZoom}
+        onFocus={focusAt}
+        onTapPoint={onTapPoint}
+      />
+
+      {/* Drawn after the touch layer, so the knob takes its own drag rather
+          than the picture underneath taking it as another tap to focus. */}
+      {canExpose ? (
+        <ExposureRail
+          point={focusPoint}
+          frame={railFrame}
+          value={exposure}
+          min={exposureRange.min}
+          max={exposureRange.max}
+          evStep={exposureRange.evStep}
+          locked={exposureLocked}
+          canLock={exposureRange.lockAvailable}
+          onChange={setExposure}
+          onLock={setExposureLock}
+        />
+      ) : null}
+
+      {/* One full-frame state at a time, most urgent first: a reconnect is
+          news even while paused, and a broadcast that has gone off air is no
+          longer paused in any sense that matters to viewers. */}
+      {state === "reconnecting" ? (
+        <ReconnectingOverlay seconds={uptime} />
+      ) : lostAir && !live && panel === null ? (
+        <OffAirOverlay />
+      ) : paused ? (
+        <PausedOverlay live={live} seconds={pausedAt} />
+      ) : null}
+
+      {/* Centred on the picture, and a child of the screen rather than of the
+          head-up bar.
+          It was nested inside that bar, so `inset-0` resolved against a strip a
+          few tiles tall: the count sat at the top of the frame with its circle
+          cut off by the edge. In landscape it centres on the picture rather
+          than the screen, because the panel down the trailing edge is not part
+          of the shot. */}
+      {counting !== null ? (
+        <View
+          pointerEvents="none"
+          className="absolute inset-y-0 left-0 items-center justify-center"
+          style={{ right: wide ? COLUMN : 0 }}
+        >
+          <View className="h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-black/70">
+            <Mono className="text-6xl font-bold text-white">{counting}</Mono>
+          </View>
+          <Text
+            maxFontSizeMultiplier={HUD_TEXT}
+            style={textDir()}
+            className="pt-3 text-sm font-medium text-white/90"
+          >
+            {t("hud.goingLive")}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* The head-up display: what is happening, in the corners, out of the
+          middle of the frame where a face goes. Kept to one shallow band
+          because the root layout drops its update prompt into this space. */}
+      <SafeAreaView
+        pointerEvents="box-none"
+        edges={["top", "left", "right"]}
+        className="absolute inset-x-0 top-0"
+      >
+        <View
+          pointerEvents="box-none"
+          className={`flex-row items-start justify-between gap-2 px-3 pt-1.5 ${
+            wide ? COLUMN_CLEARANCE : ""
+          }`}
+        >
+          <View className="items-start gap-1.5">
+            {/*
+              On air, this is the whole readout: a red dot, how long, and what
+              is actually leaving. Those three answer "is this working", and
+              splitting them across two corners meant checking two places
+              mid-broadcast.
+
+              The word "On air" goes when it does - the red dot and a running
+              clock say it, and the room needed for the rate is worth more than
+              a label repeating what the colour already carries. Every other
+              state keeps its word, because a stopped clock says nothing.
+            */}
+            <Chip tone={congested && live ? "warn" : "plain"}>
+              <View className={`h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-white/40"}`} />
+              {live && !paused ? (
+                <Mono className="text-xs text-white">
+                  {formatUptime(uptime)}
+                  {bitrate > 0 ? ` · ${formatKbps(bitrate)}` : ""}
+                </Mono>
+              ) : (
+                <>
+                  <Text
+                    maxFontSizeMultiplier={HUD_TEXT}
+                    className="text-xs font-semibold uppercase text-white"
+                  >
+                    {state === "reconnecting"
+                      ? t("hud.reconnecting")
+                      : paused
+                        ? t("hud.paused")
+                        : state === "connecting"
+                          ? t("hud.connecting")
+                          : t("hud.offAir")}
+                  </Text>
+                  {live ? <Mono className="text-xs">{formatUptime(uptime)}</Mono> : null}
+                </>
+              )}
+            </Chip>
+
+            {/* Whether anybody can watch, which the chip above cannot say: it
+                knows the phone is sending, not that YouTube is on air. */}
+            {live ? <StudioChip settled={isSettled(uptime)} /> : null}
+
+            {recording ? (
+              <RecordPill
+                seconds={recordSeconds}
+                elapsed={formatUptime(recordSeconds)}
+                onStop={() => {
+                  tick();
+                  void toggleRecording();
+                }}
+              />
+            ) : null}
+          </View>
+
+          <View className="items-end gap-1.5">{statusChips}</View>
+        </View>
+
+      <View pointerEvents="box-none" className={`gap-1.5 px-3 pt-1.5 ${wide ? COLUMN_CLEARANCE : ""}`}>
+          {/*
+            One banner, the worst - see lib/broadcast/banners.ts for the order
+            and why. Each used to draw on its own, so a stall arrived with the
+            microphone banner and the heat guard under it and the face being
+            filmed disappeared behind three boxes.
+          */}
+          {shownBanner === "failure" ? (
+            /*
+              The failure banner, and the broadcast that went off air on its
+              own.
+
+              `disconnected` is not enough to go on by itself: it is also what
+              the encoder says a moment after the operator presses End.
+              `lostAir` is the hook's word for the other case - it was live,
+              nobody ended it, and it is not coming back - which is the one
+              that used to leave nothing but a small Off air chip behind.
+
+              The reason is said in plain words (lib/broadcast/failure.ts). The
+              encoder's own - a Java exception, quoted whole - is in the log,
+              one press away on the outlined button.
+
+              Trying again goes through the check, exactly as the shutter does,
+              so a broadcast restarted in a hurry still gets the microphone and
+              picture looked at and the countdown to step back from.
+            */
+            <Banner
+              tone="bad"
+              text={
+                state === "authError"
+                  ? t("failure.auth")
+                  : lostAir
+                    ? `${t("banner.offAir")}${detail ? ` ${plainFailure(detail)}` : ""}`
+                    : plainFailure(detail)
+              }
+              action={
+                connection && counting === null && !live && state !== "connecting"
+                  ? {
+                      label: lostAir ? t("banner.goLiveAgain") : t("banner.tryAgain"),
+                      onPress: () => setPanel("preflight"),
+                    }
+                  : undefined
+              }
+              secondary={{ label: t("common.openLog"), onPress: () => setPanel("log") }}
+              onDismiss={lostAir ? dismissLostAir : undefined}
+            />
+          ) : shownBanner === "stall" ? (
+            <Banner
+              tone="bad"
+              text={t("banner.stall")}
+              action={
+                connection
+                  ? { label: t("banner.restart"), onPress: () => void restart(connection) }
+                  : undefined
+              }
+            />
+          ) : shownBanner === "micSilence" && micSilence ? (
+            /*
+              Below a stall, because it is the same class of fault - something
+              has stopped going out - and unlike congestion there is nothing the
+              app can do about it on its own.
+
+              The action depends on where the microphone is: off air it can be
+              reopened, and live it cannot without the risk of coming back
+              silent, so the offer there is the connection restart that the
+              stall banner already uses and that has been exercised on every bad
+              network this app has seen.
+            */
+            <Banner
+              tone="bad"
+              text={
+                micSilence.reason === "call"
+                  ? t("banner.micCall")
+                  : micSilence.reason === "headset"
+                    ? t("banner.micHeadset")
+                    : micSilence.reason === "taken"
+                      ? t("banner.micTaken")
+                      : t("banner.micSilent")
+              }
+              action={
+                live
+                  ? connection
+                    ? { label: t("banner.restart"), onPress: () => void restart(connection) }
+                    : undefined
+                  : { label: t("banner.reopenMic"), onPress: () => void restoreMicrophone() }
+              }
+            />
+          ) : shownBanner === "guard" && shownGuard ? (
+            /*
+              The phone's own state, which is the only banner here that can be
+              true while the broadcast is perfectly healthy - and the only one
+              that says what the app is about to do by itself.
+            */
+            <Banner
+              tone={shownGuard.tone}
+              text={shownGuard.text}
+              /* Not the ones that say the app is about to act: those are a
+                 sentence the operator has to be able to read afterwards. */
+              onDismiss={
+                shownGuard.action
+                  ? undefined
+                  : () => setDismissed(`${shownGuard.id}:${shownGuard.tone}`)
+              }
+            />
+          ) : shownBanner === "congestion" ? (
+            <Banner
+              tone="warn"
+              text={t("banner.congestion")}
+            />
+          ) : null}
+
+          {/* In the same column, under the banner, so the two can never be
+              drawn over each other. It only appears off air. */}
+          <UpdateCard />
+        </View>
+      </SafeAreaView>
+
+      {/* The level meter lives on the leading edge in both orientations, which
+          is the edge the controls are never on - readable out of the corner of
+          an eye while the operator is doing something else. It is a readout and
+          nothing more: it used to mute the broadcast when tapped, which is a
+          trap to put under a hand that is holding the phone. */}
+      {/*
+        The rails sit beside the meter on the same edge, and take their own
+        touches - so this wrapper cannot be `pointerEvents="none"` the way the
+        meter alone was. `box-none` lets the picture keep everything that is
+        not a control.
+      */}
+      {/*
+        Centred down the edge rather than anchored at a percentage of it.
+        
+        A fraction of the way down is fine for a meter, which is one fixed
+        height. It is wrong for a panel that grows when a rail opens: the focus
+        rail ran off the bottom of the screen and took its own AF button with
+        it. Pinned top and bottom with the content centred, the panel grows
+        into the space either side of the middle and cannot walk off an edge.
+      */}
+      <View
+        pointerEvents="box-none"
+        className="absolute inset-y-0 left-3 flex-row items-center justify-center gap-2"
+      >
+        <View pointerEvents="none" className="items-start">
+          <LevelMeter muted={muted} />
+        </View>
+
+        {/*
+          Zoom and focus, as rails rather than only as gestures. Pinch already
+          sets the zoom and a tap already sets the focus, and neither is enough
+          on a tripod: pinching needs two fingers on a phone that is clamped to
+          something, and a tap says where to look rather than how far.
+
+          Hidden while a panel is open, because a panel in landscape is a sheet
+          down this same edge and the two would be stacked on each other.
+        */}
+        {panel === null ? (
+          <EdgeRails
+            open={rail}
+            onOpen={setRail}
+            canZoom={canZoom}
+            zoom={zoom}
+            zoomRange={zoomRange}
+            onZoom={setZoom}
+            canFocus={(capabilities?.focusNear ?? 0) > 0}
+            focusNear={capabilities?.focusNear ?? 0}
+            focusDistance={focusDistance}
+            manualFocus={manualFocus}
+            onFocusDistance={setFocusDistance}
+            onAutoFocus={resumeAutoFocus}
+          />
+        ) : null}
+
+        {/*
+          The microphone, named and changeable, at the foot of the same edge.
+
+          An absolute child of this full-height column rather than a sibling of
+          the meter. Two earlier attempts failed in ways worth recording: laid
+          out in the flex row it set the row's width, so a long device name
+          pushed the zoom and focus buttons a third of the way across the
+          picture; hung off the meter with `top: "100%"` it took part in no
+          layout and did not appear at all. Pinned to the bottom of an element
+          whose height is the screen, it can do neither.
+        */}
+        {micChoices.length > 0 && !(wide && panel !== null) ? (
+          <Pressable
+            accessibilityRole="button"
+            // Spoken in full: the abbreviation is for the eye, not the ear.
+            accessibilityLabel={t("mic.chipA11y", {
+              name: audioInput ? describeAudioInput(audioInput) : t("mic.androidChoice"),
+            })}
+            accessibilityState={{ expanded: panel === "mic" }}
+            onPress={() => togglePanel("mic")}
+            hitSlop={4}
+            style={{ position: "absolute", bottom: micBottom, left: 0, maxWidth: 104 }}
+            className={`min-h-11 items-center justify-center rounded-full px-2 py-1.5 ${
+              panel === "mic" ? "bg-white" : "bg-black/70"
+            }`}
+          >
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={HUD_TEXT}
+              className={`text-[10px] ${panel === "mic" ? "text-black" : "text-white"}`}
+            >
+              {t("mic.chip", { name: micLabel })}
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {/* In landscape a panel is a sheet down the leading side: dropping it at
+          the bottom of the frame as portrait does would leave it two lines
+          tall, and putting it in the middle would cover the shot. It clears the
+          level meter on its left and the control column on its right. */}
+      {wide && panelBody ? (
+        <SafeAreaView
+          pointerEvents="box-none"
+          edges={["top", "bottom", "left"]}
+          className="absolute bottom-0 left-0 top-0"
+        >
+          <View
+            pointerEvents="box-none"
+            className="h-full justify-center pl-12 pr-2"
+            style={{ width: width - COLUMN - 8 }}
+          >
+            {panelBody}
+          </View>
+        </SafeAreaView>
+      ) : null}
+
+      {/* In landscape the one-line notice goes across the picture rather than
+          into the control column, where 160px would break "Photo saved to the
+          camera roll" over four lines. */}
+      {wide ? (
+        <View
+          pointerEvents="none"
+          className="absolute bottom-4 left-0"
+          style={{ width: width - COLUMN }}
+        >
+          <Notice text={notice.text} at={notice.at} tone={notice.tone} />
+        </View>
+      ) : null}
+
+      {wide ? (
+        /* Landscape: a column down the trailing edge, built from the bottom up
+           so the primary button lands in the corner under the thumb and the
+           rest stacks above it in order of how often it is touched. Labels are
+           dropped here - there is no vertical room for four rows of words, and
+           every state in the column is carried by its fill and its glyph. */
+        <SafeAreaView
+          pointerEvents="box-none"
+          edges={["top", "right", "bottom"]}
+          className="absolute bottom-0 right-0 top-0"
+        >
+          {/* An opaque panel, not a transparent overlay.
+              The letterbox beside a 16:9 picture is not always as wide as this
+              column, so half the controls were sitting on the shot while the
+              other half sat on black - which looked like a mistake because it
+              was one. Painting the column makes it a border whatever the
+              picture does behind it. */}
+          <View
+            pointerEvents="box-none"
+            className="h-full justify-center gap-3 bg-[#0E1319] px-3 py-3"
+            style={{ width: COLUMN }}
+          >
+
+            {/* A panel, not a row turned sideways.
+                The margin exists because a 16:9 frame does not fill a 20:9
+                phone, so it is given a job: where this is going at the top, the
+                controls in two columns beneath it, and the shutter low where
+                the thumb already is when the phone is held to frame a shot. Two
+                columns rather than one long line because a single column of six
+                puts the top of it out of reach. */}
+            {/* Centred, not right-aligned. The shutter is 80px and the discs
+                are 44, so aligning their right edges left them on different
+                centre lines and the overflow under the shutter looked skewed. */}
+            <View pointerEvents="box-none" className="items-center gap-3">
+              {/* The destination as a line of text rather than a pill. It is a
+                  label on the panel saying where this goes, not a control
+                  competing with the discs under it - and a pill wide enough for
+                  a real name crowds a 224px margin. */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  connection
+                    ? t("destination.a11y", { name: connection.name })
+                    : t("destination.choose")
+                }
+                onPress={() => router.push("/(tabs)/connections")}
+                className="min-h-11 w-full flex-row items-center gap-1 active:opacity-60"
+              >
+                {/*
+                  flex-1 so the name gives way rather than growing.
+                  `numberOfLines` alone truncates the text but does not stop it
+                  claiming its full width first - it took the whole row and
+                  pushed the chevron off the edge of the screen, so a long
+                  destination name lost the one thing saying the row opens
+                  something.
+
+                  Two lines, not one. The column is under a hundred points
+                  wide, and an Arabic or Hausa class name - longer in letters,
+                  and drawn in a fallback font wider than Inter - was cut to its
+                  first word, which is usually the same first word as the next
+                  class's. Directed by its own first letter, so Arabic sits
+                  right and keeps its punctuation at the right end.
+                */}
+                <Text
+                  className={`flex-1 text-sm ${connection ? "text-white" : "text-amber-300"}`}
+                  style={connection ? bidi(connection.name) : textDir()}
+                  numberOfLines={2}
+                  maxFontSizeMultiplier={HUD_TEXT}
+                >
+                  {connection?.name ?? t("destination.choose")}
+                </Text>
+                <ChevronIcon className="h-4 w-4 shrink-0 text-white/70" />
+              </Pressable>
+
+              {/* Two to a row, by construction rather than by wrapping, and
+                  spaced by a number rather than by whatever flex had spare. */}
+              <View className="gap-2">
+                {landscapeRows.map((row, index) => (
+                  <View key={index} className="flex-row justify-center gap-2">
+                    {row}
+                  </View>
+                ))}
+              </View>
+
+              <ShutterButton
+                label={primary.label}
+                mode={primary.mode}
+                onPress={primary.onPress}
+              />
+
+              {/* Below the shutter and on its own, because it opens something
+                  rather than doing something. */}
+              <ControlButton
+                icon={MoreIcon}
+                label={t("control.more")}
+                showLabel={false}
+                size="sm"
+                on={moreOpen || panel !== null}
+                onPress={() => setMoreOpen(true)}
+              />
+            </View>
+          </View>
+        </SafeAreaView>
+      ) : (
+        /* Portrait: a dock along the bottom. The whole right edge and the
+           middle of the frame are left to the picture, which is where the rail
+           of panel buttons used to sit with its labels running off the screen.
+           The dock sits on the safe area directly now - there is no tab bar
+           under it any more, so the slack that used to clear one would just be
+           picture given away. */
+        <SafeAreaView
+          pointerEvents="box-none"
+          edges={["bottom", "left", "right"]}
+          className="absolute inset-x-0 bottom-0"
+        >
+          {panelBody ? (
+            <View pointerEvents="box-none" className="px-3 pb-1">
+              {panelBody}
+            </View>
+          ) : null}
+
+          <Notice text={notice.text} at={notice.at} tone={notice.tone} />
+
+          {/* Built around the shutter rather than as rows of equals: the eye
+              finds the red circle, the thumb finds what is beside it, and
+              everything set up before a broadcast is a size smaller and a row
+              further away. */}
+          <View pointerEvents="box-none" className="items-center gap-3 px-4 pb-6 pt-2">
+            {/*
+              Stood aside while the check is open. It is the one panel that
+              has to be read whole, and these two rows were the hundred-odd
+              points that pushed its last sections below the fold - while
+              saying nothing it does not: it names the destination itself,
+              and has its own way out.
+            */}
+            {panel !== "preflight" ? (
+              <>
+                <View className="flex-row items-center justify-center gap-3">{secondaryRow}</View>
+
+                <DestinationChip
+                  name={connection?.name ?? null}
+                  onPress={() => router.push("/(tabs)/connections")}
+                />
+              </>
+            ) : null}
+
+            <View className="flex-row items-center justify-center gap-4">
+              {stateTiles}
+              <ShutterButton
+                label={primary.label}
+                mode={primary.mode}
+                onPress={primary.onPress}
+              />
+              {flankIds.map((id) => tileFor(id, "md"))}
+            </View>
+          </View>
+        </SafeAreaView>
+      )}
+
+      <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={moreItems} />
+    </View>
+  );
+}
+
+/**
+ * The microphone in the operator's words, not Android's. Names come through as
+ * whatever the accessory calls itself - often a long adapter name - so the
+ * chip truncates and the kind is the fallback for a device that gives no name
+ * at all.
+ */
+/**
+ * The chip's version of a device name, which has about nine characters to work
+ * with.
+ *
+ * In landscape the picture is centred and the strip beside it is roughly
+ * eighty points wide - so "Built-in microphone 1" is not a label, it is a
+ * banner across the lower third of the shot. The full names stay in the panel,
+ * where there is room for them and where the choice is actually made; this
+ * only has to answer "which one is live" at a glance.
+ */
+function shortAudioInput(device: AudioDevice | null): string {
+  if (!device) return t("mic.auto");
+  switch (device.kind) {
+    case "builtin": {
+      // Keep the number, which is the only thing telling two of them apart.
+      const n = /\d+$/.exec(device.name)?.[0];
+      return n ? t("mic.builtinNumbered", { n }) : t("mic.builtin");
+    }
+    case "wired":
+      return t("mic.wired");
+    case "bluetooth":
+      return t("mic.bluetooth");
+    case "usb":
+      return t("mic.usb");
+    default:
+      return t("mic.other");
+  }
+}
+
+/**
+ * One line of the check before going live. The mark is a word-sized glyph and
+ * the colour doubles it, so neither alone carries the meaning.
+ *
+ * `info` is for a fact that is not a fault - a microphone nobody has spoken
+ * into yet. Drawn in the same amber as a warning it was read as one, on every
+ * broadcast, and a check that is always amber stops being read at all.
+ */
+type CheckTone = "ok" | "info" | "warn" | "bad";
+
+const CHECK_MARK: Record<CheckTone, { glyph: string; mark: string; text: string }> = {
+  ok: { glyph: "✓", mark: "text-green-400", text: "text-white" },
+  info: { glyph: "·", mark: "text-white/70", text: "text-white/80" },
+  warn: { glyph: "!", mark: "text-amber-400", text: "text-amber-100" },
+  bad: { glyph: "!", mark: "text-red-400", text: "text-red-100" },
+};
+
+function CheckLine({ tone, children }: { tone: CheckTone; children: React.ReactNode }) {
+  const look = CHECK_MARK[tone];
+  /**
+   * The whole line turns round in Arabic, mark and all: the mark is read
+   * first, so it belongs at the start of the line, and in Arabic the start is
+   * the right. Done on this row only - see RTL_TEXT for why not the app.
+   */
+  const dir = textDir();
+  return (
+    <View className="flex-row gap-2" style={dir ? { direction: "rtl" } : undefined}>
+      <Text className={`text-sm font-bold ${look.mark}`}>{look.glyph}</Text>
+      <Text style={dir} className={`flex-1 text-sm ${look.text}`}>
+        {children}
+      </Text>
+    </View>
+  );
+}
+
+function describeAudioInput(device: AudioDevice): string {
+  if (device.name) return device.name;
+  switch (device.kind) {
+    case "wired":
+      return t("mic.wiredFull");
+    case "bluetooth":
+      return t("mic.bluetoothFull");
+    case "usb":
+      return t("mic.usbFull");
+    default:
+      return t("mic.externalFull");
+  }
+}
+
+/** `back · 68°`, which is what tells one rear lens from another. */
+function describeCamera(entry: CameraInfo): string {
+  const facing =
+    entry.facing === "external"
+      ? "External camera"
+      : entry.facing === "front"
+        ? "Front"
+        : entry.facing === "back"
+          ? "Rear"
+          : `Camera ${entry.id}`;
+  return entry.fieldOfView > 0 ? `${facing} · ${entry.fieldOfView}°` : facing;
+}
+
+/**
+ * Android's CONTROL_AWB_MODE values, in the words a camera operator uses. A
+ * mode this phone has that we have no name for is still offered, by number:
+ * better an odd label than a control the camera supports and we hid.
+ */
+function describeWhiteBalance(mode: number): string {
+  switch (mode) {
+    case 0:
+      return "Manual";
+    case AWB_AUTO:
+      return "Auto";
+    case 2:
+      return "Tungsten - warm indoor light";
+    case 3:
+      return "Fluorescent";
+    case 4:
+      return "Warm fluorescent";
+    case 5:
+      return "Daylight";
+    case 6:
+      return "Cloudy";
+    case 7:
+      return "Twilight";
+    case 8:
+      return "Shade";
+    default:
+      return `Mode ${mode}`;
+  }
+}
+
+/**
+ * Android's CONTROL_AE_ANTIBANDING_MODE values.
+ *
+ * Named by the supply frequency rather than the constant, because the operator
+ * knows which country they are standing in and does not know what the sensor
+ * calls it. Auto is right nearly always; the manual settings exist for the
+ * case auto gets wrong, which is mixed lighting.
+ */
+function describeAntiFlicker(mode: number): string {
+  switch (mode) {
+    case 0:
+      return "Off";
+    case 1:
+      return "50 Hz - Europe, Africa, Asia, Australia";
+    case 2:
+      return "60 Hz - Americas, Japan, Korea";
+    case 3:
+      return "Auto";
+    default:
+      return `Mode ${mode}`;
+  }
+}
+
+/**
+ * Android's NOISE_REDUCTION_MODE values.
+ *
+ * The trade is sharpness against grain and, at high quality, against the frame
+ * rate the pipeline can hold - so each label says what it costs rather than
+ * just what it is. Fast is the default on nearly every phone.
+ */
+function describeNoiseReduction(mode: number): string {
+  switch (mode) {
+    case 0:
+      return "Off - grain kept, detail kept";
+    case 1:
+      return "Fast - no cost to frame rate";
+    case 2:
+      return "High quality - may cost frame rate";
+    case 3:
+      return "Minimal";
+    case 4:
+      return "Zero shutter lag";
+    default:
+      return `Mode ${mode}`;
+  }
+}
+
+/**
+ * What a recording is actually writing, in bits per second.
+ *
+ * The recorder takes the same picture the broadcast does, so the destination's
+ * video bitrate is the video half; the audio half comes from the phone
+ * settings, which is where it is set. With no destination chosen there is
+ * nothing to record at, and a zero here reads downstream as "no estimate"
+ * rather than as an infinite amount of room.
+ */
+function recordingBitrateOf(connection: Connection | null): number {
+  const audio = loadSettings().audioBitrate;
+  /**
+   * The recorder's own bitrate when the operator set one, because that is what
+   * is being written to the disk - the destination's figure would under-count
+   * a 1080p master of a 360p stream by a factor of eight.
+   */
+  const chosen = recordQualityFor(loadPreferences().recordHeight);
+  if (chosen.bitrate > 0) return chosen.bitrate + audio;
+  if (!connection) return 0;
+  return connection.videoBitrate + audio;
+}

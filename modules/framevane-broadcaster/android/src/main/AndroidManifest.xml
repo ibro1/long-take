@@ -1,0 +1,64 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- A Bluetooth headset's microphone reaches an AudioRecord only once the SCO
+       link has been asked for, and every call that asks - startBluetoothSco,
+       setBluetoothScoOn, setCommunicationDevice - is gated on this. Android
+       does not throw when it is missing: it logs a line to logcat and does
+       nothing, which would leave the operator with a chosen headset, a silent
+       broadcast and an app that believed it had done the work. Install-time
+       and not dangerous, so nothing has to be asked of the operator. -->
+  <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <!-- Broadcasting continues while the screen is off or the app is behind
+       another one, which Android only allows from a foreground service. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <!-- A foreground service is exempt from being killed, not from the CPU
+       sleeping - and an encoder on a sleeping CPU stops encoding, which is
+       exactly the case background broadcasting exists for. -->
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <!-- From Android 13 the broadcast notification is invisible without this, and
+       an invisible notification means the operator cannot see or stop a
+       broadcast that is holding their camera. The native side deliberately does
+       not request it: asking for a permission is a UI decision, so the JS side
+       asks, at a moment where it can explain why. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- The broadcast screen buzzes once when the stream drops and once when it
+       gives up, for an operator who is looking at the room rather than the
+       phone. Expo's prebuild adds this anyway; declared here so the buzz does
+       not depend on a default somebody may one day block. Install-time. -->
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <uses-feature android:name="android.hardware.camera" android:required="true" />
+
+  <application>
+    <!-- Not exported: nothing outside this app has any business starting a
+         broadcast. The service types are what buy camera and microphone access
+         in the background, and Android 14 cross-checks them against the
+         FOREGROUND_SERVICE_CAMERA and _MICROPHONE permissions above. -->
+    <service
+      android:name="de.linkfa.framevane.broadcaster.BroadcastService"
+      android:exported="false"
+      android:foregroundServiceType="camera|microphone" />
+
+    <!-- Hands a recording to a video player.
+
+         Android has refused a file:// URI across an app boundary since Nougat,
+         so opening one means a content URI, and a content URI means a provider
+         whose configured roots contain the file. The provider that ships with
+         expo-file-system covers internal storage only, and these are written to
+         the app's external files directory - so there was nothing able to
+         describe them, and the failure read as the phone having no video
+         player. Its own provider, covering its own directories. -->
+    <provider
+      android:name="androidx.core.content.FileProvider"
+      android:authorities="${applicationId}.recordings"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/framevane_recording_paths" />
+    </provider>
+  </application>
+</manifest>

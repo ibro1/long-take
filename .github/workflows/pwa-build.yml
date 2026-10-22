@@ -1,0 +1,34 @@
+name: Publish PWA to Github Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  Build:
+    name: Publish Web App to Github Pages
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: 📦 Checkout project repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 📦 Setup Bun + install deps
+        uses: ./.github/actions/setup-bun-install
+
+      - name: ⚙️ Run build
+        run: bun build:web
+        shell: bash
+
+      - name: 📱 Publish web app
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist

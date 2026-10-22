@@ -1,0 +1,5 @@
+{
+  "platforms": ["android", "ios"],
+  "android": { "modules": ["de.linkfa.framevane.broadcaster.BroadcasterModule"] },
+  "ios": { "modules": ["BroadcasterModule"] }
+}

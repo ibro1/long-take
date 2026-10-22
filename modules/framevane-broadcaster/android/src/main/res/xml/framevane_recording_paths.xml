@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Where the recordings actually are.
+
+  They are written to getExternalFilesDir(DIRECTORY_MOVIES), and the FileProvider
+  that arrives with expo-file-system covers only <files-path> and <cache-path> -
+  both internal. Asking it for a content URI to a recording therefore failed
+  with "failed to find configured root", which the app reported as no video
+  player being installed. There were plenty; there was no URI to hand them.
+-->
+<paths>
+  <external-files-path name="framevane_recordings" path="Movies/" />
+  <external-files-path name="framevane_stills" path="Pictures/" />
+</paths>
