@@ -916,7 +916,7 @@ export default function BroadcastScreen() {
    * provider at the root to gain a few points of precision is not a change to
    * make while moving a chip.
    */
-  const micBottom = 44;
+  const micBottom = wide ? 44 : 180;
 
   const closePanel = () => setPanel(null);
   const togglePanel = (id: Exclude<PanelId, null>) => setPanel(panel === id ? null : id);
