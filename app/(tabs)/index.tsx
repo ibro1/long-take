@@ -1179,8 +1179,9 @@ export default function BroadcastScreen() {
       icon: ShapeIcon,
       label: t("control.shape"),
       hint: t("control.shapeHint"),
-      on: panel === "shape",
-      onPress: () => togglePanel("shape"),
+      on: settingsOpen && settingsOpenTo === "/settings/framing",
+      // The light Framing page, as the framing ring opens.
+      onPress: () => openSettings("/settings/framing"),
     },
     overlays: {
       // Offered whether or not this destination has a compositor behind it: an
@@ -1835,6 +1836,20 @@ export default function BroadcastScreen() {
       <EncoderStatsPanel live={live} onClose={closePanel} />
     );
 
+  /**
+   * Analytics never just does nothing: a panel over the picture is closed
+   * first (the strip cannot show under one), and while the heat ladder has the
+   * aids paused, the button says so.
+   */
+  const toggleAnalytics = () => {
+    if (ladder.aidsOff) {
+      notify("Analytics are paused while the phone cools down");
+      return;
+    }
+    setPanel(null);
+    setAnalyticsOpen((open) => !open);
+  };
+
   const openSettings = (to: string | null = null) => {
     setSettingsOpenTo(to);
     setSettingsOpen(true);
@@ -2284,9 +2299,9 @@ export default function BroadcastScreen() {
                 <RingButton
                   icon={FramingIcon}
                   label={CONTROL.shape.label}
-                  active={panel === "shape"}
+                  active={settingsOpen && settingsOpenTo === "/settings/framing"}
                   tone="accent"
-                  onPress={() => togglePanel("shape")}
+                  onPress={() => openSettings("/settings/framing")}
                 />
                 <StatusBadge state={badgeState} label={badgeLabel} />
               </View>
@@ -2359,7 +2374,7 @@ export default function BroadcastScreen() {
                     icon={AnalyticsIcon}
                     label={t("control.analytics")}
                     active={analyticsOpen || monitor !== "off"}
-                    onPress={() => setAnalyticsOpen((v) => !v)}
+                    onPress={toggleAnalytics}
                   />
                 </View>
 
@@ -2439,9 +2454,9 @@ export default function BroadcastScreen() {
                 icon={FramingIcon}
                 size={40}
                 label={CONTROL.shape.label}
-                active={panel === "shape"}
+                active={settingsOpen && settingsOpenTo === "/settings/framing"}
                 tone="accent"
-                onPress={() => togglePanel("shape")}
+                onPress={() => openSettings("/settings/framing")}
               />
               <StatusBadge state={badgeState} label={badgeLabel} />
               <View pointerEvents="box-none" className="flex-1 items-center">
@@ -2452,7 +2467,7 @@ export default function BroadcastScreen() {
                 size={40}
                 label={t("control.analytics")}
                 active={analyticsOpen || monitor !== "off"}
-                onPress={() => setAnalyticsOpen((v) => !v)}
+                onPress={toggleAnalytics}
               />
               <GlassDisc
                 icon={SettingsIcon}
@@ -2585,6 +2600,10 @@ export default function BroadcastScreen() {
           hasTorch: capabilities?.torch ?? false,
           torch,
           toggleTorch,
+          orientation,
+          setOrientation,
+          guides,
+          toggleGuide,
         }}
       >
         <SettingsGrid
@@ -2770,6 +2789,10 @@ type CameraSettings = {
   hasTorch: boolean;
   torch: boolean;
   toggleTorch: () => void;
+  orientation: Orientation;
+  setOrientation: (mode: Orientation) => void;
+  guides: GuideSet;
+  toggleGuide: (key: keyof GuideSet) => void;
 };
 const CameraSettingsContext = createContext<CameraSettings | null>(null);
 
@@ -2842,7 +2865,49 @@ function StabilizationSettingsPage() {
   );
 }
 
+/** Filmic's framing button: the shape of the picture and the guides over it. */
+function FramingSettingsPage() {
+  const c = useContext(CameraSettingsContext);
+  if (!c) return null;
+  return (
+    <Page title="Framing">
+      <Group
+        title="Shape"
+        note="Set it before going live: a stream that changes shape halfway through is letterboxed everywhere downstream."
+      >
+        <ChoiceRow
+          label="Picture"
+          value={c.orientation}
+          options={[
+            { label: "Follow the phone", value: "auto" as Orientation },
+            { label: "Portrait", value: "portrait" as Orientation },
+            { label: "Landscape", value: "landscape" as Orientation },
+          ]}
+          onChange={c.setOrientation}
+        />
+      </Group>
+      <Group title="Guides" note="Drawn on the viewfinder only - never recorded or streamed.">
+        <SwitchRow label="Thirds" on={c.guides.thirds} onPress={() => c.toggleGuide("thirds")} />
+        <SwitchRow label="Centre cross" on={c.guides.centre} onPress={() => c.toggleGuide("centre")} />
+        <SwitchRow
+          label="4:3 safe area"
+          detail="What a 4:3 crop keeps"
+          on={c.guides.safe43}
+          onPress={() => c.toggleGuide("safe43")}
+        />
+        <SwitchRow
+          label="1:1 safe area"
+          detail="What a square crop keeps"
+          on={c.guides.safe11}
+          onPress={() => c.toggleGuide("safe11")}
+        />
+      </Group>
+    </Page>
+  );
+}
+
 const HOST_PAGES = {
+  "/settings/framing": FramingSettingsPage,
   "/settings/hardware": HardwareSettingsPage,
   "/settings/stabilization": StabilizationSettingsPage,
 };
