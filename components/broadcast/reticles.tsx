@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { type LayoutChangeEvent, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Svg, { Path } from "react-native-svg";
 
-import { Text } from "@/components/ui/text";
 import { filmic } from "@/lib/theme/filmic";
-
-import { ExposureIcon, FocusIcon, LockedIcon } from "./icons";
 
 /**
  * The Filmic-style monitoring reticles: two pucks that live on the picture, one
@@ -13,33 +11,110 @@ import { ExposureIcon, FocusIcon, LockedIcon } from "./icons";
  * that thing measured. Unlike a tap-to-focus flash, they are always on screen -
  * the shot is being judged through them, so they stay put until moved.
  *
- * Focus (the square) racks focus to where it is dropped. Exposure (the circle
- * with the sun) is the metering point: the camera reads the light under it, so
+ * Focus (the gapped square) racks focus to where it is dropped. Exposure (the
+ * gapped circle) is the metering point: the camera reads the light under it, so
  * moving it onto a bright area darkens the picture and onto a dark area brightens
  * it - there is no separate brightness slider, the position is the control.
  *
  * A tap on either puck locks it: its position and its setting freeze (focus held,
  * exposure AE-locked) and it can no longer be dragged. A second tap frees it.
+ * Lock state is carried by colour alone (amber free, red locked), as in Filmic -
+ * labels or badges on the picture would sit over what is being judged.
  *
- * Positions are kept normalised (0..1) so a reticle stays on the same part of
- * the picture when the phone turns or the frame is remeasured.
+ * Positions are kept normalised (0..1) of the FULL frame, not the picture area,
+ * because the parent maps them straight onto the camera view underneath.
  */
 
-/** The focus square's side, big enough to grab, small enough to aim. */
-const FOCUS_SIZE = 76;
+/** Drawn size of either reticle. */
+const DRAW = 80;
 
-/** The exposure puck's diameter. */
-const EXPO_SIZE = 64;
+/** Touch target around the drawing; a little larger so a thumb catches the edge. */
+const TOUCH = 96;
+
+/** Half the drawing: how far a centre must stay from the chrome. */
+const HALF = DRAW / 2;
+
+const STROKE = 2.5;
+
+/** A soft dark under-stroke so the amber reads over a bright sky or a white wall. */
+const SHADOW_STROKE = 4.5;
+const SHADOW_COLOR = "rgba(0,0,0,0.35)";
 
 /** Throttle for live metering updates while dragging the exposure puck. */
 const EXPO_APPLY_MS = 80;
 
 type Frame = { width: number; height: number };
+type Insets = { left: number; right: number; top: number; bottom: number };
+type Point = { x: number; y: number };
+
+/**
+ * An SVG arc on a circle, angles in degrees measured clockwise from 12 o'clock,
+ * so a gap "at the top" is simply the span either side of 0.
+ */
+function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: number): string {
+  const at = (deg: number) => {
+    const rad = (deg * Math.PI) / 180;
+    return { x: cx + r * Math.sin(rad), y: cy - r * Math.cos(rad) };
+  };
+  const a = at(startDeg);
+  const b = at(endDeg);
+  const large = endDeg - startDeg > 180 ? 1 : 0;
+  // Sweep 1 = clockwise on screen, matching the clockwise angle convention.
+  return `M ${a.x} ${a.y} A ${r} ${r} 0 ${large} 1 ${b.x} ${b.y}`;
+}
+
+// --- Exposure: open circle, gaps top and bottom ------------------------------
+const EXPO_R = 38;
+const EXPO_GAP_DEG = 32;
+const EXPO_PATHS = [
+  arcPath(HALF, HALF, EXPO_R, EXPO_GAP_DEG / 2, 180 - EXPO_GAP_DEG / 2),
+  arcPath(HALF, HALF, EXPO_R, 180 + EXPO_GAP_DEG / 2, 360 - EXPO_GAP_DEG / 2),
+];
+
+// --- Focus: rounded square, gaps on the left and right sides ------------------
+const FOCUS_SIDE = 76;
+const FOCUS_R = 8;
+const FOCUS_GAP = 22;
+const FOCUS_PATHS = (() => {
+  const lo = (DRAW - FOCUS_SIDE) / 2;
+  const hi = lo + FOCUS_SIDE;
+  const gapTop = HALF - FOCUS_GAP / 2;
+  const gapBottom = HALF + FOCUS_GAP / 2;
+  // Upper bracket runs clockwise (left side up, across the top, right side down),
+  // the lower one anticlockwise, so each corner arc bends the right way.
+  const upper =
+    `M ${lo} ${gapTop} L ${lo} ${lo + FOCUS_R} ` +
+    `A ${FOCUS_R} ${FOCUS_R} 0 0 1 ${lo + FOCUS_R} ${lo} ` +
+    `L ${hi - FOCUS_R} ${lo} ` +
+    `A ${FOCUS_R} ${FOCUS_R} 0 0 1 ${hi} ${lo + FOCUS_R} ` +
+    `L ${hi} ${gapTop}`;
+  const lower =
+    `M ${lo} ${gapBottom} L ${lo} ${hi - FOCUS_R} ` +
+    `A ${FOCUS_R} ${FOCUS_R} 0 0 0 ${lo + FOCUS_R} ${hi} ` +
+    `L ${hi - FOCUS_R} ${hi} ` +
+    `A ${FOCUS_R} ${FOCUS_R} 0 0 0 ${hi} ${hi - FOCUS_R} ` +
+    `L ${hi} ${gapBottom}`;
+  return [upper, lower];
+})();
+
+function ReticleShape({ paths, locked }: { readonly paths: readonly string[]; readonly locked: boolean }) {
+  const color = locked ? filmic.color.alert : filmic.color.accent;
+  return (
+    <Svg width={DRAW} height={DRAW} viewBox={`0 0 ${DRAW} ${DRAW}`} pointerEvents="none">
+      {paths.map((d, i) => (
+        <Path key={`s${i}`} d={d} stroke={SHADOW_COLOR} strokeWidth={SHADOW_STROKE} strokeLinecap="round" fill="none" />
+      ))}
+      {paths.map((d, i) => (
+        <Path key={`c${i}`} d={d} stroke={color} strokeWidth={STROKE} strokeLinecap="round" fill="none" />
+      ))}
+    </Svg>
+  );
+}
 
 export function Reticles({
   canFocus,
   canExpose,
-  rightInset,
+  insets,
   exposureLocked,
   onFocus,
   onExposurePoint,
@@ -49,30 +124,87 @@ export function Reticles({
   readonly canFocus: boolean;
   /** False when the lens reports no exposure range to give. */
   readonly canExpose: boolean;
-  /** Width of the landscape control column to keep the pucks clear of, or 0. */
-  readonly rightInset: number;
+  /** Screen space (px) taken by chrome on each side; pucks stay inside the picture area between them. */
+  readonly insets: { left: number; right: number; top: number; bottom: number };
   readonly exposureLocked: boolean;
-  /** Autofocus point, normalised 0..1, committed when the puck is dropped. */
+  /** Focus point, normalised 0..1 of the FULL frame, committed on release. */
   readonly onFocus: (x: number, y: number) => void;
-  /** Exposure metering point, normalised 0..1, updated while dragging. */
+  /** Exposure point, normalised 0..1 of the FULL frame. Called once after first layout with the default position, throttled (80ms) while dragging, and on release. */
   readonly onExposurePoint: (x: number, y: number) => void;
   readonly onExposureLock: (on: boolean) => void;
 }) {
   const [frame, setFrame] = useState<Frame>({ width: 0, height: 0 });
-  const onLayout = useCallback((e: LayoutChangeEvent) => {
-    setFrame(e.nativeEvent.layout);
-  }, []);
 
-  // Normalised puck centres. Start offset from each other so both read at once.
+  // Normalised puck centres. Null until the first real layout, because the
+  // defaults sit inside the picture area and that needs the frame and insets.
   // Mirrored into refs so a gesture reads the live position at onStart without
   // listing the position in its deps - otherwise every drag frame would rebuild
   // the gesture under the thumb and stutter the drag.
-  const [focusN, setFocusN] = useState({ x: 0.42, y: 0.5 });
-  const [expoN, setExpoN] = useState({ x: 0.6, y: 0.5 });
+  const [focusN, setFocusN] = useState<Point | null>(null);
+  const [expoN, setExpoN] = useState<Point | null>(null);
   const focusNRef = useRef(focusN);
   focusNRef.current = focusN;
   const expoNRef = useRef(expoN);
   expoNRef.current = expoN;
+
+  // Read through refs in onLayout so the callback stays stable and the defaults
+  // use whatever insets are current at the moment the frame first measures.
+  const insetsRef = useRef<Insets>(insets);
+  insetsRef.current = insets;
+  const onExposurePointRef = useRef(onExposurePoint);
+  onExposurePointRef.current = onExposurePoint;
+
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setFrame({ width, height });
+    if (width === 0 || height === 0 || expoNRef.current !== null) return;
+    // First real layout: place both pucks apart so they read at once, and tell
+    // the parent where exposure is metering so the camera and the puck agree
+    // before the operator has touched anything.
+    const i = insetsRef.current;
+    const areaW = Math.max(0, width - i.left - i.right);
+    const areaH = Math.max(0, height - i.top - i.bottom);
+    const cy = (i.top + areaH / 2) / height;
+    const expo = { x: (i.left + areaW * 0.35) / width, y: cy };
+    const focus = { x: (i.left + areaW * 0.65) / width, y: cy };
+    expoNRef.current = expo;
+    focusNRef.current = focus;
+    setExpoN(expo);
+    setFocusN(focus);
+    onExposurePointRef.current(expo.x, expo.y);
+  }, []);
+
+  // Deps on the inset numbers, not the object: a parent passing a fresh literal
+  // each render must not rebuild the gestures mid-drag.
+  const { left: insetL, right: insetR, top: insetT, bottom: insetB } = insets;
+
+  // Keep the whole drawing inside the picture area, off the chrome. If the area
+  // is narrower than a reticle, park it in the middle rather than inverting.
+  const clampX = useCallback(
+    (px: number) => {
+      const min = insetL + HALF;
+      const max = frame.width - insetR - HALF;
+      if (max < min) return (min + max) / 2;
+      return Math.min(max, Math.max(min, px));
+    },
+    [frame.width, insetL, insetR],
+  );
+  const clampY = useCallback(
+    (py: number) => {
+      const min = insetT + HALF;
+      const max = frame.height - insetB - HALF;
+      if (max < min) return (min + max) / 2;
+      return Math.min(max, Math.max(min, py));
+    },
+    [frame.height, insetT, insetB],
+  );
+
+  // Pixel centre of a puck, clamped at render time too so a rotation or a
+  // changed inset never leaves a puck under the chrome.
+  const toPx = useCallback(
+    (n: Point): Point => ({ x: clampX(n.x * frame.width), y: clampY(n.y * frame.height) }),
+    [clampX, clampY, frame],
+  );
 
   // Focus lock is a viewfinder state: there is no separate native focus-lock
   // beyond the hold that placing the point already applies, so the lock simply
@@ -83,44 +215,28 @@ export function Reticles({
   const exposureLockedRef = useRef(exposureLocked);
   exposureLockedRef.current = exposureLocked;
 
-  // The reachable area, keeping a puck off the edge and out from under the
-  // landscape control column.
-  const bounds = useMemo(() => {
-    const right = Math.max(0, frame.width - rightInset);
-    return { left: 0, top: 0, right, bottom: frame.height };
-  }, [frame, rightInset]);
-
-  const clampX = useCallback(
-    (px: number, half: number) => Math.min(bounds.right - half, Math.max(bounds.left + half, px)),
-    [bounds],
-  );
-  const clampY = useCallback(
-    (px: number, half: number) => Math.min(bounds.bottom - half, Math.max(bounds.top + half, px)),
-    [bounds],
-  );
-
   // --- Focus puck: drag to rack focus, tap to lock --------------------------
-  const focusStart = useRef({ x: 0, y: 0 });
+  const focusStart = useRef<Point>({ x: 0, y: 0 });
   const focusGesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(canFocus)
       .runOnJS(true)
       .onStart(() => {
-        if (focusLockedRef.current) return;
-        focusStart.current = {
-          x: focusNRef.current.x * frame.width,
-          y: focusNRef.current.y * frame.height,
-        };
+        if (focusLockedRef.current || !focusNRef.current) return;
+        // Start from where the puck is drawn (clamped), not the stored value, so
+        // the first drag after a rotation does not jump.
+        focusStart.current = toPx(focusNRef.current);
       })
       .onUpdate((e) => {
         if (focusLockedRef.current || frame.width === 0 || frame.height === 0) return;
-        const half = FOCUS_SIZE / 2;
-        const px = clampX(focusStart.current.x + e.translationX, half);
-        const py = clampY(focusStart.current.y + e.translationY, half);
-        setFocusN({ x: px / frame.width, y: py / frame.height });
+        const px = clampX(focusStart.current.x + e.translationX);
+        const py = clampY(focusStart.current.y + e.translationY);
+        const next = { x: px / frame.width, y: py / frame.height };
+        focusNRef.current = next;
+        setFocusN(next);
       })
       .onEnd(() => {
-        if (focusLockedRef.current) return;
+        if (focusLockedRef.current || !focusNRef.current) return;
         // Rack focus once, on release, rather than spamming tap-to-focus events
         // across the whole drag.
         onFocus(focusNRef.current.x, focusNRef.current.y);
@@ -135,39 +251,35 @@ export function Reticles({
       });
 
     return Gesture.Exclusive(pan, tap);
-  }, [canFocus, frame, clampX, clampY, onFocus]);
+  }, [canFocus, frame, clampX, clampY, toPx, onFocus]);
 
   // --- Exposure puck: drag to set metering point, tap to AE-lock ------------
-  const expoStart = useRef({ x: 0, y: 0 });
+  const expoStart = useRef<Point>({ x: 0, y: 0 });
   const lastExpoApply = useRef(0);
   const expoGesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(canExpose)
       .runOnJS(true)
       .onStart(() => {
-        if (exposureLockedRef.current) return;
-        expoStart.current = {
-          x: expoNRef.current.x * frame.width,
-          y: expoNRef.current.y * frame.height,
-        };
+        if (exposureLockedRef.current || !expoNRef.current) return;
+        expoStart.current = toPx(expoNRef.current);
       })
       .onUpdate((e) => {
         if (exposureLockedRef.current || frame.width === 0 || frame.height === 0) return;
-        const half = EXPO_SIZE / 2;
-        const px = clampX(expoStart.current.x + e.translationX, half);
-        const py = clampY(expoStart.current.y + e.translationY, half);
-        const nx = px / frame.width;
-        const ny = py / frame.height;
-        setExpoN({ x: nx, y: ny });
+        const px = clampX(expoStart.current.x + e.translationX);
+        const py = clampY(expoStart.current.y + e.translationY);
+        const next = { x: px / frame.width, y: py / frame.height };
+        expoNRef.current = next;
+        setExpoN(next);
         // Meter live as it moves, but not every frame.
         const now = Date.now();
         if (now - lastExpoApply.current > EXPO_APPLY_MS) {
           lastExpoApply.current = now;
-          onExposurePoint(nx, ny);
+          onExposurePoint(next.x, next.y);
         }
       })
       .onEnd(() => {
-        if (exposureLockedRef.current) return;
+        if (exposureLockedRef.current || !expoNRef.current) return;
         onExposurePoint(expoNRef.current.x, expoNRef.current.y);
       });
 
@@ -180,46 +292,35 @@ export function Reticles({
       });
 
     return Gesture.Exclusive(pan, tap);
-  }, [canExpose, frame, clampX, clampY, onExposurePoint, onExposureLock]);
+  }, [canExpose, frame, clampX, clampY, toPx, onExposurePoint, onExposureLock]);
 
-  if (frame.width === 0 && frame.height === 0) {
+  if (frame.width === 0 || frame.height === 0 || !focusN || !expoN) {
     return <View pointerEvents="box-none" style={{ flex: 1 }} onLayout={onLayout} />;
   }
 
-  const focusPx = { x: focusN.x * frame.width, y: focusN.y * frame.height };
-  const expoPx = { x: expoN.x * frame.width, y: expoN.y * frame.height };
+  const focusPx = toPx(focusN);
+  const expoPx = toPx(expoN);
 
   return (
     <View pointerEvents="box-none" style={{ flex: 1 }} onLayout={onLayout}>
       {canFocus ? (
         <GestureDetector gesture={focusGesture}>
           <View
+            accessibilityRole="button"
+            accessibilityLabel="Focus point"
+            accessibilityHint="Drag to move. Tap to lock."
+            accessibilityState={{ selected: focusLocked }}
             style={{
               position: "absolute",
-              left: focusPx.x - FOCUS_SIZE / 2,
-              top: focusPx.y - FOCUS_SIZE / 2,
-              width: FOCUS_SIZE,
-              height: FOCUS_SIZE,
+              left: focusPx.x - TOUCH / 2,
+              top: focusPx.y - TOUCH / 2,
+              width: TOUCH,
+              height: TOUCH,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <View
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                borderRadius: 10,
-                borderWidth: 1.5,
-                borderColor: focusLocked ? filmic.color.accent : "rgba(244,245,247,0.92)",
-              }}
-            />
-            <FocusIcon className={focusLocked ? "h-4 w-4 text-filmic-accent" : "h-4 w-4 text-filmic-ink/90"} />
-            <View style={{ position: "absolute", bottom: -16 }}>
-              <Badge text={focusLocked ? "AF·L" : "AF"} locked={focusLocked} />
-            </View>
+            <ReticleShape paths={FOCUS_PATHS} locked={focusLocked} />
           </View>
         </GestureDetector>
       ) : null}
@@ -227,54 +328,24 @@ export function Reticles({
       {canExpose ? (
         <GestureDetector gesture={expoGesture}>
           <View
+            accessibilityRole="button"
+            accessibilityLabel="Exposure point"
+            accessibilityHint="Drag to move. Tap to lock."
+            accessibilityState={{ selected: exposureLocked }}
             style={{
               position: "absolute",
-              left: expoPx.x - EXPO_SIZE / 2,
-              top: expoPx.y - EXPO_SIZE / 2,
-              width: EXPO_SIZE,
-              height: EXPO_SIZE,
+              left: expoPx.x - TOUCH / 2,
+              top: expoPx.y - TOUCH / 2,
+              width: TOUCH,
+              height: TOUCH,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <View
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                borderRadius: EXPO_SIZE / 2,
-                borderWidth: 2,
-                borderColor: exposureLocked ? filmic.color.accent : "rgba(244,245,247,0.95)",
-                backgroundColor: "rgba(12,13,17,0.28)",
-              }}
-            />
-            {exposureLocked ? (
-              <LockedIcon className="h-4 w-4 text-filmic-accent" />
-            ) : (
-              <ExposureIcon className="h-5 w-5 text-filmic-ink" />
-            )}
-            <View style={{ position: "absolute", bottom: -16 }}>
-              <Badge text={exposureLocked ? "AE·L" : "AE"} locked={exposureLocked} />
-            </View>
+            <ReticleShape paths={EXPO_PATHS} locked={exposureLocked} />
           </View>
         </GestureDetector>
       ) : null}
-    </View>
-  );
-}
-
-function Badge({ text, locked }: { readonly text: string; readonly locked: boolean }) {
-  return (
-    <View className="rounded px-1.5 py-0.5" style={{ backgroundColor: filmic.color.panel }}>
-      <Text
-        className={`text-[9px] font-semibold uppercase tracking-wide ${
-          locked ? "text-filmic-accent" : "text-filmic-ink/90"
-        }`}
-      >
-        {text}
-      </Text>
     </View>
   );
 }

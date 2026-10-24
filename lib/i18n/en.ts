@@ -65,6 +65,7 @@ export const en = {
   "control.flip": "Flip",
   "control.flipHint": "Switch between the front and back cameras.",
   "control.settings": "Settings",
+  "control.analytics": "Analytics",
   "control.more": "More",
   "control.destinations": "Destinations",
   "control.nowhere": "Nowhere to send this yet.",

@@ -1,5 +1,6 @@
 package de.linkfa.framevane.broadcaster
 
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.ModuleDefinitionBuilder
 
 /**
@@ -48,8 +49,10 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
 
   AsyncFunction("setExposure") { value: Int -> view().setExposure(value) }
 
-  // The exposure reticle's position: meter the light where it sits.
-  AsyncFunction("setExposurePoint") { x: Float, y: Float -> view().setExposurePoint(x, y) }
+  // The exposure reticle's spot meter: brightness of the picture where it sits.
+  AsyncFunction("sampleLuma") { x: Float, y: Float, promise: Promise ->
+    view().sampleLuma(x, y, promise)
+  }
 
   /**
    * Manual focus in dioptres - 1/metres, so 0 is infinity and the lens maximum

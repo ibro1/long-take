@@ -64,6 +64,7 @@ export const ha: Record<StringKey, string> = {
   "control.flip": "Juya",
   "control.flipHint": "Sauya tsakanin kyamarar gaba da ta baya.",
   "control.settings": "Saituna",
+  "control.analytics": "Nazari",
   "control.more": "Ƙari",
   "control.destinations": "Wuraren aikawa",
   "control.nowhere": "Babu inda za a tura wannan tukuna.",

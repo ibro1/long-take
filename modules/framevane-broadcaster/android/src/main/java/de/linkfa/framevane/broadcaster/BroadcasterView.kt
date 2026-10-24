@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioDeviceCallback
@@ -13,6 +15,9 @@ import android.media.AudioManager
 import android.media.MediaCodec
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
@@ -32,6 +37,7 @@ import com.pedro.encoder.utils.CodecUtil
 import com.pedro.encoder.utils.gl.AspectRatioMode
 import com.pedro.library.generic.GenericStream
 import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import kotlin.math.atan
@@ -41,6 +47,9 @@ import kotlin.math.roundToInt
 internal const val LOG_INFO = "info"
 internal const val LOG_WARN = "warn"
 internal const val LOG_ERROR = "error"
+
+/** The spot meter's sample bitmap side: 16x16 = 256 pixels to average. */
+private const val METER_SIDE = 16
 
 /**
  * The camera preview, and the encoder behind it.
@@ -1543,6 +1552,75 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   fun clearMonitorForAir() {
     if (monitorFilter != null) setMonitor("off")
+  }
+
+  // --- Spot metering ----------------------------------------------------
+  //
+  // The exposure reticle meters the light under it, Filmic-style. Camera2's
+  // own answer for that - CONTROL_AE_REGIONS - is optional hardware: this
+  // phone ignored it, and on phones in continuous AF a moving metering region
+  // also nudges focus, which is the "exposure reticle focuses" report. So the
+  // picture itself is measured instead: PixelCopy reads the preview pixels
+  // under the reticle and the screen steers exposure compensation toward a
+  // mid-grey there. Compensation is the one exposure control every camera has.
+
+  private val meterHandler by lazy { Handler(Looper.getMainLooper()) }
+
+  /**
+   * Mean brightness (Rec.709 luma of the displayed pixels, 0..1) of a small box
+   * of the preview around a point given in fractions of this view, or -1 when
+   * the preview cannot be read - no surface yet, or the copy failed.
+   *
+   * The box is about an eighth of the short side: big enough that a steady
+   * hand reads the same patch from one sample to the next, small enough to be
+   * a spot. It is copied straight into a 16x16 bitmap, so the GPU does the
+   * averaging and the CPU only sums 256 pixels.
+   */
+  fun sampleLuma(x: Float, y: Float, promise: Promise) {
+    val w = surfaceView.width
+    val h = surfaceView.height
+    if (w <= 0 || h <= 0 || !surfaceView.holder.surface.isValid) {
+      promise.resolve(-1.0)
+      return
+    }
+    val half = (minOf(w, h) / 16).coerceAtLeast(4)
+    val cx = (x.coerceIn(0f, 1f) * w).toInt()
+    val cy = (y.coerceIn(0f, 1f) * h).toInt()
+    val box = Rect(
+      (cx - half).coerceAtLeast(0),
+      (cy - half).coerceAtLeast(0),
+      (cx + half).coerceAtMost(w),
+      (cy + half).coerceAtMost(h),
+    )
+    if (box.width() <= 0 || box.height() <= 0) {
+      promise.resolve(-1.0)
+      return
+    }
+    val bitmap = Bitmap.createBitmap(METER_SIDE, METER_SIDE, Bitmap.Config.ARGB_8888)
+    try {
+      PixelCopy.request(surfaceView, box, bitmap, { result ->
+        if (result != PixelCopy.SUCCESS) {
+          bitmap.recycle()
+          promise.resolve(-1.0)
+          return@request
+        }
+        val pixels = IntArray(METER_SIDE * METER_SIDE)
+        bitmap.getPixels(pixels, 0, METER_SIDE, 0, 0, METER_SIDE, METER_SIDE)
+        bitmap.recycle()
+        var sum = 0.0
+        for (c in pixels) {
+          val r = (c shr 16 and 0xff) / 255.0
+          val g = (c shr 8 and 0xff) / 255.0
+          val b = (c and 0xff) / 255.0
+          sum += 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        promise.resolve(sum / pixels.size)
+      }, meterHandler)
+    } catch (e: IllegalArgumentException) {
+      // Thrown when the surface is released between the check and the copy.
+      bitmap.recycle()
+      promise.resolve(-1.0)
+    }
   }
 
   // --- Carrying on in the background ------------------------------------

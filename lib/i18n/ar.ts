@@ -64,6 +64,7 @@ export const ar: Record<StringKey, string> = {
   "control.flip": "تبديل",
   "control.flipHint": "التبديل بين الكاميرا الأمامية والخلفية.",
   "control.settings": "الإعدادات",
+  "control.analytics": "التحليلات",
   "control.more": "المزيد",
   "control.destinations": "الوجهات",
   "control.nowhere": "لا توجد وجهة للإرسال بعد.",

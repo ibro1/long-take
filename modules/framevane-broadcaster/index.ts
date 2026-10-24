@@ -256,19 +256,18 @@ export function setExposure(value: number): Promise<void> {
 }
 
 /**
- * Meter exposure where the operator put the exposure reticle, in fractions of
- * the preview (0,0 top-left .. 1,1 bottom-right) - the independent AE point,
- * separate from focus.
+ * Brightness (0..1 luma) of the picture under a point, in fractions of the
+ * preview (0,0 top-left .. 1,1 bottom-right) - the exposure reticle's spot
+ * meter. -1 when the preview cannot be read.
  *
- * Feature-detected against the raw module so it no-ops on a dev client that
- * predates the native function, rather than throwing through the dev proxy:
- * the reticle still moves and the EV trim still works, and the metering point
- * follows once the newer native build is installed.
+ * Feature-detected against the raw module so a dev client that predates the
+ * native function answers -1 (meter idle) rather than throwing through the dev
+ * proxy.
  */
-export function setExposurePoint(x: number, y: number): Promise<void> {
-  const fn = (nativeModule as Record<string, unknown>).setExposurePoint;
-  if (typeof fn !== "function") return Promise.resolve();
-  return native.setExposurePoint(x, y);
+export function sampleLuma(x: number, y: number): Promise<number> {
+  const fn = (nativeModule as Record<string, unknown>).sampleLuma;
+  if (typeof fn !== "function") return Promise.resolve(-1);
+  return native.sampleLuma(x, y);
 }
 
 /**

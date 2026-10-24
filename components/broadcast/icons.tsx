@@ -1,6 +1,7 @@
 import {
   AlignJustify,
   Camera,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleDot,
@@ -21,12 +22,14 @@ import {
   Pause,
   Play,
   Radio,
+  Scan,
   ScrollText,
   Settings,
   Search,
   Square,
   Sun,
   SwitchCamera,
+  Table2,
   X,
   Zap,
   ZapOff,
@@ -68,6 +71,9 @@ function withClassName(...icons: LucideIcon[]) {
 }
 
 withClassName(
+  ChevronDown,
+  Scan,
+  Table2,
   AlignJustify,
   EyeOff,
   Focus,
@@ -150,4 +156,10 @@ export {
   AlignJustify as ZebraIcon,
   /** False colour: exposure mapped to a palette. */
   Palette as FalseColorIcon,
+  /** The drawer at the top of the frame: everything not on the glass. */
+  ChevronDown as DrawerIcon,
+  /** Analytics - peaking, zebras, false colour - behind one button, as Filmic keeps them. */
+  Table2 as AnalyticsIcon,
+  /** The shape of the outgoing picture, as Filmic's framing ring. */
+  Scan as FramingIcon,
 };

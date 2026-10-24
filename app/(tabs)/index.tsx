@@ -31,7 +31,16 @@ import {
 import { BatteryBar } from "@/components/broadcast/battery";
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { Reticles } from "@/components/broadcast/reticles";
-import { ManualSliders } from "@/components/broadcast/manual-sliders";
+import { ZoomRocker } from "@/components/broadcast/zoom-rocker";
+import {
+  ColorDiamond,
+  GlassDisc,
+  InfoPanel,
+  RingButton,
+  StatusBadge,
+  type BroadcastState,
+} from "@/components/broadcast/filmic-chrome";
+import { useSpotMeter } from "@/lib/broadcast/useSpotMeter";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
 import { plainFailure } from "@/lib/broadcast/failure";
@@ -52,10 +61,12 @@ import {
   Toggle,
 } from "@/components/broadcast/chrome";
 import {
+  AnalyticsIcon,
   CameraIcon,
-  ChevronIcon,
   CloseIcon,
+  DrawerIcon,
   FlipIcon,
+  FramingIcon,
   GoLiveIcon,
   GlobeIcon,
   LogIcon,
@@ -103,7 +114,6 @@ import {
   type CameraInfo,
   type MonitorMode,
   type Orientation,
-  setExposurePoint,
   setMonitor,
 } from "@/modules/framevane-broadcaster";
 
@@ -206,9 +216,13 @@ const FILL = { flex: 1 } as const;
  */
 const COLUMN = 120;
 
+/**
+ * Landscape's leading column, Filmic's black strip with the framing ring, the
+ * state badge and the colour diamond. It sits in the letterbox a 16:9 picture
+ * leaves on a 20:9 phone, so it costs the shot almost nothing.
+ */
+const LEFT_COLUMN = 84;
 
-/** Enough of the frame kept clear of the column that a banner is not squeezed under it. */
-const COLUMN_CLEARANCE = "pr-[128px]";
 
 export default function BroadcastScreen() {
   const router = useRouter();
@@ -779,11 +793,37 @@ export default function BroadcastScreen() {
     if (live && monitor !== "off") setMonitorMode("off");
   }, [live, monitor]);
 
+  /** Analytics (peaking / zebra / false colour) live behind one button, as in Filmic. */
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+
   /**
-   * In landscape the picture is not the whole screen: the control column down
-   * the trailing edge sits over it, so the reticles are kept clear of it.
+   * Where the exposure reticle sits, in fractions of the camera view. The spot
+   * meter reads the picture there and steers compensation toward a mid-grey -
+   * held while the exposure is locked, and while a monitoring aid recolours the
+   * picture it would otherwise be measuring.
    */
-  const reticleInset = wide ? COLUMN : 0;
+  const [exposurePoint, setExposurePoint] = useState<{ x: number; y: number } | null>(null);
+  const onExposurePoint = useCallback((x: number, y: number) => setExposurePoint({ x, y }), []);
+  useSpotMeter({
+    point: exposurePoint,
+    enabled:
+      (capabilities?.available ?? false) &&
+      exposureRange.max > exposureRange.min &&
+      !exposureLocked &&
+      monitor === "off",
+    exposure,
+    min: exposureRange.min,
+    max: exposureRange.max,
+    onExposure: setExposure,
+  });
+
+  /**
+   * The picture area the reticles may use: between the Filmic side columns in
+   * landscape, between the head-up band and the dock in portrait.
+   */
+  const reticleInsets = wide
+    ? { left: LEFT_COLUMN, right: COLUMN, top: 0, bottom: 0 }
+    : { left: 0, right: 0, top: 72, bottom: 230 };
 
   // Nothing yet, rather than the wrong thing. The check takes a frame or two.
   if (!answered) {
@@ -1187,6 +1227,13 @@ export default function BroadcastScreen() {
         size="sm"
         onPress={() => router.push("/(tabs)/settings")}
       />
+      <ControlButton
+        icon={AnalyticsIcon}
+        label={t("control.analytics")}
+        size="sm"
+        on={analyticsOpen || monitor !== "off"}
+        onPress={() => setAnalyticsOpen((v) => !v)}
+      />
       {secondaryIds.map((id) => tileFor(id, "sm"))}
       <ControlButton
         icon={MoreIcon}
@@ -1200,6 +1247,12 @@ export default function BroadcastScreen() {
 
   /** The rest, as rows with room for a label and a line of explanation. */
   const moreItems: MoreItem[] = [
+    {
+      icon: GlobeIcon,
+      label: t("control.destinations"),
+      hint: connection?.name ?? t("control.nowhere"),
+      onPress: () => router.push("/(tabs)/connections"),
+    },
     ...QUICK_CONTROLS.filter((id) => !glass.includes(id)).map((id) => ({
       icon: CONTROL[id].icon,
       label: CONTROL[id].label,
@@ -1207,12 +1260,6 @@ export default function BroadcastScreen() {
       on: CONTROL[id].on,
       onPress: CONTROL[id].onPress,
     })),
-    {
-      icon: GlobeIcon,
-      label: t("control.destinations"),
-      hint: connection?.name ?? t("control.nowhere"),
-      onPress: () => router.push("/(tabs)/connections"),
-    },
   ];
 
   /** Mute, with the tick that says it took. Used by every mute on this screen. */
@@ -1262,58 +1309,71 @@ export default function BroadcastScreen() {
     </>
   );
 
-  /**
-   * The landscape panel's controls: icons only, laid out two to a row.
-   *
-   * An array rather than a fragment, because the rows are built from it in
-   * pairs. Wrapping was doing that job before and doing it loosely - the break
-   * landed wherever the box ran out, and the row spacing came from whatever
-   * flex had left over rather than from a number.
-   */
-  const landscapeItems = [
-    <ControlButton
-      key="settings"
-      icon={SettingsIcon}
-      label={t("control.settings")}
-      showLabel={false}
-      size="sm"
-      onPress={() => router.push("/(tabs)/settings")}
-    />,
-    ...secondaryIds.map((id) => tileFor(id, "sm", false)),
-    <ControlButton
-      key="mic"
-      icon={muted ? MicOffIcon : MicIcon}
-      label={muted ? t("control.muted") : t("control.mute")}
-      labelCarriesState
-      showLabel={false}
-      size="sm"
-      on={muted}
-      tone="alert"
-      onPress={muteWithTick}
-    />,
-    ...(capabilities?.torch
-      ? [
-          <ControlButton
-            key="torch"
-            icon={torch ? TorchIcon : TorchOffIcon}
-            label={t("control.torch")}
-            spoken={torch ? t("control.torchOn") : t("control.torchOff")}
-            toggle
-            showLabel={false}
-            size="sm"
-            on={torch}
-            tone="warn"
-            onPress={toggleTorch}
-          />,
-        ]
-      : []),
-    ...flankIds.map((id) => tileFor(id, "sm", false)),
-  ];
 
-  const landscapeRows: React.ReactNode[][] = [];
-  for (let i = 0; i < landscapeItems.length; i += 2) {
-    landscapeRows.push(landscapeItems.slice(i, i + 2));
-  }
+  /** What the leading column's badge says - Filmic's PRO spot, given to the air. */
+  const badgeState: BroadcastState =
+    state === "reconnecting"
+      ? "reconnecting"
+      : paused
+        ? "paused"
+        : live
+          ? "live"
+          : state === "connecting" || counting !== null
+            ? "connecting"
+            : "offAir";
+  const badgeLabel =
+    badgeState === "live"
+      ? t("studio.live")
+      : badgeState === "reconnecting"
+        ? t("hud.reconnecting")
+        : badgeState === "paused"
+          ? t("hud.paused")
+          : badgeState === "connecting"
+            ? t("hud.connecting")
+            : t("hud.offAir");
+
+  /**
+   * The operator's quick controls, on the picture's bottom corners in landscape.
+   * Framing and the camera panel have fixed homes in the leading column, so
+   * they are not repeated here; flip joins the torch on the left, as camera
+   * things, and the rest go right.
+   */
+  const cornerIds = onGlass.filter((id) => id !== "camera" && id !== "shape");
+  const leftCornerIds = cornerIds.filter((id) => id === "flip");
+  const rightCornerIds = cornerIds.filter((id) => id !== "flip");
+  const cornerDisc = (id: QuickControl) => {
+    const control = CONTROL[id];
+    return (
+      <GlassDisc
+        key={id}
+        icon={control.icon}
+        label={control.label}
+        active={control.on}
+        tone={control.tone === "alert" ? "alert" : "accent"}
+        onPress={control.onPress}
+      />
+    );
+  };
+
+  /**
+   * The info panel's second line: what is leaving while on air, and what is
+   * going wrong when something is - the frames out and dropped that used to
+   * have a chip of their own.
+   */
+  const troubled = live && (congested || dropped > 0);
+  const infoSubline = !live
+    ? null
+    : troubled
+      ? [
+          stats ? t("hud.fpsOut", { fps: stats.measuredFps }) : null,
+          dropped > 0 ? t("hud.dropped", { count: dropped }) : null,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : bitrate > 0
+        ? formatKbps(bitrate)
+        : null;
+  const infoWarn = troubled || (charge.level <= CRITICAL_BATTERY && !charge.charging);
 
   const panelBody =
     panel === null ? null : panel === "log" ? (
@@ -1752,10 +1812,10 @@ export default function BroadcastScreen() {
           <Reticles
             canFocus={capabilities?.available ?? false}
             canExpose={canExpose}
-            rightInset={reticleInset}
+            insets={reticleInsets}
             exposureLocked={exposureLocked}
             onFocus={focusAt}
-            onExposurePoint={(x, y) => void setExposurePoint(x, y).catch(() => {})}
+            onExposurePoint={onExposurePoint}
             onExposureLock={setExposureLock}
           />
         </View>
@@ -1782,8 +1842,8 @@ export default function BroadcastScreen() {
       {counting !== null ? (
         <View
           pointerEvents="none"
-          className="absolute inset-y-0 left-0 items-center justify-center"
-          style={{ right: wide ? COLUMN : 0 }}
+          className="absolute inset-y-0 items-center justify-center"
+          style={{ left: wide ? LEFT_COLUMN : 0, right: wide ? COLUMN : 0 }}
         >
           <View className="h-28 w-28 items-center justify-center rounded-full border border-filmic-line bg-filmic-surface/80">
             <Mono className="text-6xl font-bold text-white">{counting}</Mono>
@@ -1806,11 +1866,10 @@ export default function BroadcastScreen() {
         edges={["top", "left", "right"]}
         className="absolute inset-x-0 top-0"
       >
+        {!wide ? (
         <View
           pointerEvents="box-none"
-          className={`flex-row items-start justify-between gap-2 px-3 pt-1.5 ${
-            wide ? COLUMN_CLEARANCE : ""
-          }`}
+          className="flex-row items-start justify-between gap-2 px-3 pt-1.5"
         >
           <View className="items-start gap-1.5">
             {/*
@@ -1868,8 +1927,13 @@ export default function BroadcastScreen() {
 
           <View className="items-end gap-1.5">{statusChips}</View>
         </View>
+        ) : null}
 
-      <View pointerEvents="box-none" className={`gap-1.5 px-3 pt-1.5 ${wide ? COLUMN_CLEARANCE : ""}`}>
+      <View
+          pointerEvents="box-none"
+          className="gap-1.5 px-3 pt-1.5"
+          style={wide ? { marginLeft: LEFT_COLUMN + 64, marginRight: COLUMN + 64, marginTop: 58 } : undefined}
+        >
           {/*
             One banner, the worst - see lib/broadcast/banners.ts for the order
             and why. Each used to draw on its own, so a stall arrived with the
@@ -2006,6 +2070,7 @@ export default function BroadcastScreen() {
         it. Pinned top and bottom with the content centred, the panel grows
         into the space either side of the middle and cannot walk off an edge.
       */}
+      {!wide ? (
       <View
         pointerEvents="box-none"
         className="absolute inset-y-0 left-3 flex-row items-center justify-center gap-2"
@@ -2014,34 +2079,6 @@ export default function BroadcastScreen() {
           <LevelMeter muted={muted} />
         </View>
 
-        {/*
-          Zoom, focus and exposure as persistent Filmic sliders down the edge,
-          rather than only as gestures. Pinch sets the zoom and dragging a
-          reticle sets focus/metering, but neither is enough on a tripod:
-          pinching needs two hands on a clamped phone, and a slider says how far,
-          not just where. Hidden while a panel is open, because a panel in
-          landscape is a sheet down this same edge.
-        */}
-        {panel === null ? (
-          <ManualSliders
-            edge="left"
-            canZoom={canZoom}
-            zoom={zoom}
-            zoomRange={zoomRange}
-            onZoom={setZoom}
-            canFocus={(capabilities?.focusNear ?? 0) > 0}
-            focusNear={capabilities?.focusNear ?? 0}
-            focusDistance={focusDistance}
-            manualFocus={manualFocus}
-            onFocusDistance={setFocusDistance}
-            onAutoFocus={resumeAutoFocus}
-            canExpose={canExpose}
-            exposure={exposure}
-            exposureRange={exposureRange}
-            onExposure={setExposure}
-            exposureLocked={exposureLocked}
-          />
-        ) : null}
 
         {/*
           The microphone, named and changeable, at the foot of the same edge.
@@ -2079,21 +2116,20 @@ export default function BroadcastScreen() {
           </Pressable>
         ) : null}
       </View>
+      ) : null}
 
-      {/* The monitoring aids, as a centred row along the bottom of the picture -
-          a scope row, clear of the left rail and (in landscape) the control
-          column. Cleared and disabled on air: a focusing help, not something
-          that goes out. */}
-      {panel === null ? (
+      {/* Analytics - peaking, zebras, false colour - in a small strip that opens
+          from its button, as Filmic keeps them: there when wanted, not parked
+          over the shot. Cleared and disabled on air - a focusing help, not
+          something that goes out. */}
+      {analyticsOpen && panel === null ? (
         <View
           pointerEvents="box-none"
-          style={{
-            position: "absolute",
-            left: 0,
-            right: wide ? COLUMN : 0,
-            bottom: wide ? 16 : 120,
-            alignItems: "center",
-          }}
+          style={
+            wide
+              ? { position: "absolute", top: 72, right: COLUMN + 12 }
+              : { position: "absolute", left: 0, right: 0, bottom: 250, alignItems: "center" }
+          }
         >
           <MonitoringSelector value={monitor} onChange={applyMonitor} disabled={live} />
         </View>
@@ -2107,12 +2143,13 @@ export default function BroadcastScreen() {
         <SafeAreaView
           pointerEvents="box-none"
           edges={["top", "bottom", "left"]}
-          className="absolute bottom-0 left-0 top-0"
+          className="absolute bottom-0 top-0"
+          style={{ left: LEFT_COLUMN }}
         >
           <View
             pointerEvents="box-none"
-            className="h-full justify-center pl-12 pr-2"
-            style={{ width: width - COLUMN - 8 }}
+            className="h-full justify-center pl-3 pr-2"
+            style={{ width: width - COLUMN - LEFT_COLUMN - 8 }}
           >
             {panelBody}
           </View>
@@ -2125,116 +2162,230 @@ export default function BroadcastScreen() {
       {wide ? (
         <View
           pointerEvents="none"
-          className="absolute bottom-4 left-0"
-          style={{ width: width - COLUMN }}
+          className="absolute"
+          style={{ bottom: 86, left: LEFT_COLUMN, width: width - COLUMN - LEFT_COLUMN }}
         >
           <Notice text={notice.text} at={notice.at} tone={notice.tone} />
         </View>
       ) : null}
 
       {wide ? (
-        /* Landscape: a column down the trailing edge, built from the bottom up
-           so the primary button lands in the corner under the thumb and the
-           rest stacks above it in order of how often it is touched. Labels are
-           dropped here - there is no vertical room for four rows of words, and
-           every state in the column is carried by its fill and its glyph. */
-        <SafeAreaView
-          pointerEvents="box-none"
-          edges={["top", "right", "bottom"]}
-          className="absolute bottom-0 right-0 top-0"
-        >
-          {/* An opaque panel, not a transparent overlay.
-              The letterbox beside a 16:9 picture is not always as wide as this
-              column, so half the controls were sitting on the shot while the
-              other half sat on black - which looked like a mistake because it
-              was one. Painting the column makes it a border whatever the
-              picture does behind it. */}
-          <View
+        /* Landscape, laid out the way Filmic Pro lays it out: two black columns
+           in the letterbox either side of the picture, a few discs on the
+           picture itself - one job per corner - and the info panel along the
+           bottom edge. What is set up rather than reached for mid-shot is one
+           tap away behind the drawer at the top. */
+        <>
+          {/* Leading column: framing, the broadcast state where Filmic shows
+              PRO, and the colour diamond for the image settings. */}
+          <SafeAreaView
             pointerEvents="box-none"
-            className="h-full justify-center gap-3 bg-filmic-surface px-3 py-3"
-            style={{ width: COLUMN }}
+            edges={["top", "left", "bottom"]}
+            className="absolute bottom-0 left-0 top-0 bg-filmic-base"
           >
-
-            {/* A panel, not a row turned sideways.
-                The margin exists because a 16:9 frame does not fill a 20:9
-                phone, so it is given a job: where this is going at the top, the
-                controls in two columns beneath it, and the shutter low where
-                the thumb already is when the phone is held to frame a shot. Two
-                columns rather than one long line because a single column of six
-                puts the top of it out of reach. */}
-            {/* Centred, not right-aligned. The shutter is 80px and the discs
-                are 44, so aligning their right edges left them on different
-                centre lines and the overflow under the shutter looked skewed. */}
-            <View pointerEvents="box-none" className="items-center gap-3">
-              {/* The destination as a line of text rather than a pill. It is a
-                  label on the panel saying where this goes, not a control
-                  competing with the discs under it - and a pill wide enough for
-                  a real name crowds a 224px margin. */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={
-                  connection
-                    ? t("destination.a11y", { name: connection.name })
-                    : t("destination.choose")
-                }
-                onPress={() => router.push("/(tabs)/connections")}
-                className="min-h-11 w-full flex-row items-center gap-1 active:opacity-60"
-              >
-                {/*
-                  flex-1 so the name gives way rather than growing.
-                  `numberOfLines` alone truncates the text but does not stop it
-                  claiming its full width first - it took the whole row and
-                  pushed the chevron off the edge of the screen, so a long
-                  destination name lost the one thing saying the row opens
-                  something.
-
-                  Two lines, not one. The column is under a hundred points
-                  wide, and an Arabic or Hausa class name - longer in letters,
-                  and drawn in a fallback font wider than Inter - was cut to its
-                  first word, which is usually the same first word as the next
-                  class's. Directed by its own first letter, so Arabic sits
-                  right and keeps its punctuation at the right end.
-                */}
-                <Text
-                  className={`flex-1 text-sm ${connection ? "text-filmic-ink" : "text-filmic-accent"}`}
-                  style={connection ? bidi(connection.name) : textDir()}
-                  numberOfLines={2}
-                  maxFontSizeMultiplier={HUD_TEXT}
-                >
-                  {connection?.name ?? t("destination.choose")}
-                </Text>
-                <ChevronIcon className="h-4 w-4 shrink-0 text-white/70" />
-              </Pressable>
-
-              {/* Two to a row, by construction rather than by wrapping, and
-                  spaced by a number rather than by whatever flex had spare. */}
-              <View className="gap-2">
-                {landscapeRows.map((row, index) => (
-                  <View key={index} className="flex-row justify-center gap-2">
-                    {row}
-                  </View>
-                ))}
+            <View
+              pointerEvents="box-none"
+              className="h-full items-center justify-between py-3"
+              style={{ width: LEFT_COLUMN }}
+            >
+              <View pointerEvents="box-none" className="items-center gap-3">
+                <RingButton
+                  icon={FramingIcon}
+                  label={CONTROL.shape.label}
+                  active={panel === "shape"}
+                  tone="accent"
+                  onPress={() => togglePanel("shape")}
+                />
+                <StatusBadge state={badgeState} label={badgeLabel} />
               </View>
-
-              <ShutterButton
-                label={primary.label}
-                mode={primary.mode}
-                onPress={primary.onPress}
-              />
-
-              {/* Below the shutter and on its own, because it opens something
-                  rather than doing something. */}
-              <ControlButton
-                icon={MoreIcon}
-                label={t("control.more")}
-                showLabel={false}
-                size="sm"
-                on={moreOpen || panel !== null}
-                onPress={() => setMoreOpen(true)}
+              <ColorDiamond
+                label={CONTROL.camera.label}
+                active={panel === "camera"}
+                onPress={() => togglePanel("camera")}
               />
             </View>
+          </SafeAreaView>
+
+          {/* Trailing column: the microphone and its meter, and the shutter low
+              where the thumb already is when the phone is held to frame. */}
+          <SafeAreaView
+            pointerEvents="box-none"
+            edges={["top", "right", "bottom"]}
+            className="absolute bottom-0 right-0 top-0 bg-filmic-base"
+          >
+            <View
+              pointerEvents="box-none"
+              className="h-full items-center justify-between py-3"
+              style={{ width: COLUMN }}
+            >
+              <View pointerEvents="box-none" className="items-center gap-1">
+                {/* Tap mutes; holding opens the input list. Mute is what is
+                    reached for mid-shot, the input is chosen beforehand. */}
+                <RingButton
+                  icon={muted ? MicOffIcon : MicIcon}
+                  label={muted ? t("control.muted") : t("control.mute")}
+                  active={muted}
+                  tone="alert"
+                  onPress={muteWithTick}
+                  onLongPress={micChoices.length > 0 ? () => togglePanel("mic") : undefined}
+                />
+                {micChoices.length > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("mic.chipA11y", {
+                      name: audioInput ? describeAudioInput(audioInput) : t("mic.androidChoice"),
+                    })}
+                    accessibilityState={{ expanded: panel === "mic" }}
+                    onPress={() => togglePanel("mic")}
+                    hitSlop={6}
+                    className="max-w-[104px] px-1 py-0.5 active:opacity-60"
+                  >
+                    <Text
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={HUD_TEXT}
+                      className={`text-[10px] ${
+                        panel === "mic" ? "text-filmic-accent" : "text-filmic-inkmuted"
+                      }`}
+                    >
+                      {micLabel}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              <View pointerEvents="none" className="flex-1 items-center justify-center py-2">
+                <LevelMeter muted={muted} />
+              </View>
+
+              <ShutterButton label={primary.label} mode={primary.mode} onPress={primary.onPress} />
+            </View>
+          </SafeAreaView>
+
+          {/* On the picture: the corners, the zoom rocker and the bottom edge. */}
+          <View
+            pointerEvents="box-none"
+            className="absolute bottom-0 top-0"
+            style={{ left: LEFT_COLUMN, right: COLUMN }}
+          >
+            <SafeAreaView pointerEvents="box-none" edges={["top", "bottom"]} className="flex-1">
+              <View pointerEvents="box-none" className="flex-1">
+                <View
+                  pointerEvents="box-none"
+                  className="flex-row items-start justify-between px-3 pt-3"
+                >
+                  <View pointerEvents="box-none" className="items-start gap-2">
+                    <GlassDisc
+                      icon={SettingsIcon}
+                      label={t("control.settings")}
+                      onPress={() => router.push("/(tabs)/settings")}
+                    />
+                    {live ? <StudioChip settled={isSettled(uptime)} /> : null}
+                    {recording ? (
+                      <RecordPill
+                        seconds={recordSeconds}
+                        elapsed={formatUptime(recordSeconds)}
+                        onStop={() => {
+                          tick();
+                          void toggleRecording();
+                        }}
+                      />
+                    ) : null}
+                  </View>
+
+                  {/* The drawer: where this is going, and everything that is not
+                      on the glass. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("control.more")}
+                    accessibilityHint={connection?.name ?? t("destination.choose")}
+                    accessibilityState={{ expanded: moreOpen }}
+                    onPress={() => setMoreOpen(true)}
+                    hitSlop={8}
+                    className="max-w-[46%] flex-row items-center gap-1.5 rounded-full px-3 py-1.5 active:opacity-60"
+                    style={{ backgroundColor: "rgba(10,10,12,0.55)" }}
+                  >
+                    <DrawerIcon className="h-5 w-5 text-filmic-ink" />
+                    <Text
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={HUD_TEXT}
+                      style={connection ? bidi(connection.name) : textDir()}
+                      className={`shrink text-xs ${
+                        connection ? "text-filmic-ink" : "text-filmic-accent"
+                      }`}
+                    >
+                      {connection?.name ?? t("destination.choose")}
+                    </Text>
+                  </Pressable>
+
+                  <GlassDisc
+                    icon={AnalyticsIcon}
+                    label={t("control.analytics")}
+                    active={analyticsOpen || monitor !== "off"}
+                    onPress={() => setAnalyticsOpen((v) => !v)}
+                  />
+                </View>
+
+                {/* The zoom rocker: the one slider on the glass. It springs back to
+                    the middle on release, so it is a speed, not a position. */}
+                {panel === null ? (
+                  <View
+                    pointerEvents="box-none"
+                    className="absolute bottom-0 top-0 justify-center"
+                    style={{ right: 4 }}
+                  >
+                    <ZoomRocker
+                      canZoom={canZoom}
+                      zoom={zoom}
+                      min={zoomRange.min}
+                      max={zoomRange.max}
+                      onZoom={setZoom}
+                      height={Math.min(240, height * 0.5)}
+                    />
+                  </View>
+                ) : null}
+
+                <View
+                  pointerEvents="box-none"
+                  className="absolute bottom-3 left-3 flex-row items-end gap-2.5"
+                >
+                  {capabilities?.torch ? (
+                    <GlassDisc
+                      icon={torch ? TorchIcon : TorchOffIcon}
+                      label={torch ? t("control.torchOn") : t("control.torchOff")}
+                      active={torch}
+                      tone="accent"
+                      onPress={toggleTorch}
+                    />
+                  ) : null}
+                  {leftCornerIds.map(cornerDisc)}
+                </View>
+
+                <View
+                  pointerEvents="box-none"
+                  className="absolute inset-x-0 bottom-3 items-center"
+                >
+                  <InfoPanel
+                    fps={connection?.fps ?? null}
+                    resolution={connection ? `${connection.height}p` : null}
+                    timecode={clock(live ? uptime : recording ? recordSeconds : 0)}
+                    hot={live || recording}
+                    subline={infoSubline}
+                    battery={{ level: charge.level, charging: charge.charging }}
+                    warn={infoWarn}
+                    onPress={() => togglePanel("stats")}
+                  />
+                </View>
+
+                <View
+                  pointerEvents="box-none"
+                  className="absolute bottom-3 right-3 flex-row items-end gap-2.5"
+                >
+                  {rightCornerIds.map(cornerDisc)}
+                </View>
+              </View>
+            </SafeAreaView>
           </View>
-        </SafeAreaView>
+        </>
       ) : (
         /* Portrait: a dock along the bottom. The whole right edge and the
            middle of the frame are left to the picture, which is where the rail
@@ -2291,6 +2442,21 @@ export default function BroadcastScreen() {
         </SafeAreaView>
       )}
 
+      {/* Portrait keeps the same rocker on the trailing edge, where the picture
+          is otherwise empty of controls. */}
+      {!wide && panel === null ? (
+        <View pointerEvents="box-none" className="absolute bottom-0 top-0 justify-center" style={{ right: 4 }}>
+          <ZoomRocker
+            canZoom={canZoom}
+            zoom={zoom}
+            min={zoomRange.min}
+            max={zoomRange.max}
+            onZoom={setZoom}
+            height={Math.min(240, height * 0.3)}
+          />
+        </View>
+      ) : null}
+
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={moreItems} />
     </View>
   );
@@ -2312,6 +2478,12 @@ export default function BroadcastScreen() {
  * where there is room for them and where the choice is actually made; this
  * only has to answer "which one is live" at a glance.
  */
+/** Filmic's running clock: always hours, minutes and seconds, so it never changes width. */
+function clock(seconds: number): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
+}
+
 function shortAudioInput(device: AudioDevice | null): string {
   if (!device) return t("mic.auto");
   switch (device.kind) {

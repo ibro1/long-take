@@ -1,9 +1,7 @@
 package de.linkfa.framevane.broadcaster
 
-import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.params.MeteringRectangle
 import android.os.SystemClock
 import android.view.MotionEvent
 
@@ -272,93 +270,6 @@ internal fun BroadcasterView.setExposureLock(on: Boolean) {
   exposureLocked = on
   captureRequestOverridden = true
   log(LOG_INFO, if (on) "Exposure locked where it is" else "Exposure metering again")
-}
-
-/**
- * Meter exposure on a point, Filmic-style: the operator drags the exposure
- * reticle and the camera reads the light under it, so the point's position is
- * the brightness control. Independent of focus - focus has its own reticle and
- * its own call ([focusAt]).
- *
- * The point arrives in preview fractions (0..1). Exposure metering, though, is
- * set in the sensor's own pixel grid (CONTROL_AE_REGIONS), which is rotated
- * relative to what the operator sees by SENSOR_ORIENTATION and mirrored on the
- * front lens - so the point is turned into sensor space before a small metering
- * box is placed around it. The box is weighted to the maximum so it, and not
- * the rest of the frame, decides the exposure.
- *
- * Goes through setCustomRequest because RootEncoder has no call for AE regions;
- * that returns false when the camera is not running yet.
- */
-internal fun BroadcasterView.setExposurePoint(x: Float, y: Float) {
-  val characteristics = currentCharacteristics() ?: run {
-    log(LOG_WARN, "Cannot meter: no camera open")
-    return
-  }
-  val maxRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE) ?: 0
-  if (maxRegions <= 0) {
-    log(LOG_WARN, "This lens cannot meter exposure on a point")
-    return
-  }
-  val active = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: run {
-    log(LOG_WARN, "Cannot meter: the sensor did not report its array size")
-    return
-  }
-  val orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-  val front = characteristics.get(CameraCharacteristics.LENS_FACING) ==
-    CameraCharacteristics.LENS_FACING_FRONT
-  val region = meteringRegion(active, x, y, orientation, front)
-
-  val applied = runCatching {
-    camera.setCustomRequest { it.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region)) }
-  }.getOrNull() ?: false
-
-  if (!applied) {
-    log(LOG_WARN, "The camera would not take an exposure metering point")
-    return
-  }
-  captureRequestOverridden = true
-  log(LOG_INFO, "Exposure metering at ($x, $y) -> sensor $region")
-}
-
-/**
- * Turn a normalised preview point into a small, max-weighted metering box in
- * the sensor's active array, correcting for sensor rotation and front mirroring.
- *
- * The box is about a quarter of the frame wide so a hand that is not perfectly
- * steady still meters roughly the same patch of the scene from one frame to the
- * next.
- */
-private fun meteringRegion(
-  active: Rect,
-  nx: Float,
-  ny: Float,
-  orientation: Int,
-  front: Boolean,
-): MeteringRectangle {
-  var dx = nx.coerceIn(0f, 1f)
-  val dy = ny.coerceIn(0f, 1f)
-  // The front preview is shown mirrored; undo it before going to the sensor.
-  if (front) dx = 1f - dx
-  // Rotate the display point into sensor space by the sensor's orientation.
-  val (sxN, syN) = when (((orientation % 360) + 360) % 360) {
-    90 -> dy to (1f - dx)
-    180 -> (1f - dx) to (1f - dy)
-    270 -> (1f - dy) to dx
-    else -> dx to dy
-  }
-
-  val w = active.width()
-  val h = active.height()
-  val halfW = (w / 8).coerceAtLeast(1)
-  val halfH = (h / 8).coerceAtLeast(1)
-  val cx = active.left + (sxN * w).toInt()
-  val cy = active.top + (syN * h).toInt()
-  val left = (cx - halfW).coerceIn(active.left, active.right - 1)
-  val top = (cy - halfH).coerceIn(active.top, active.bottom - 1)
-  val right = (cx + halfW).coerceIn(left + 1, active.right)
-  val bottom = (cy + halfH).coerceIn(top + 1, active.bottom)
-  return MeteringRectangle(left, top, right - left, bottom - top, MeteringRectangle.METERING_WEIGHT_MAX)
 }
 
 /**
