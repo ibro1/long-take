@@ -14,6 +14,7 @@ import { useRouter } from "expo-router";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 
+import ConnectionsScreen from "@/app/(tabs)/connections";
 import AboutPage from "@/app/settings/about";
 import AudioPage from "@/app/settings/audio";
 import DevicePage from "@/app/settings/device";
@@ -34,6 +35,7 @@ import { Text } from "@/components/ui/text";
  * router takes over.
  */
 const PANEL_PAGES: Record<string, ComponentType> = {
+  "/(tabs)/connections": ConnectionsScreen,
   "/settings/video": VideoPage,
   "/settings/audio": AudioPage,
   "/settings/device": DevicePage,
@@ -175,24 +177,35 @@ export function SettingsGrid({
   open,
   onClose,
   onTile,
+  openTo = null,
+  pages,
 }: {
   open: boolean;
   onClose: () => void;
   onTile: (tile: SettingsTile) => void;
+  /** Open straight onto this page rather than the grid (the destination pill). */
+  openTo?: string | null;
+  /**
+   * Pages the host draws itself because they need its live state - the
+   * viewfinder's Hardware and Stabilization pages drive the running camera.
+   */
+  pages?: Record<string, ComponentType>;
 }) {
   const { width, height } = useWindowDimensions();
   const router = useRouter();
   const [stack, setStack] = useState<string[]>([]);
 
-  // Every opening starts at the grid.
+  // Every opening starts at the grid, or at the page it was opened for.
   useEffect(() => {
-    if (!open) setStack([]);
-  }, [open]);
+    setStack(open && openTo ? [openTo] : []);
+  }, [open, openTo]);
+
+  const allPages = useMemo(() => ({ ...PANEL_PAGES, ...pages }), [pages]);
 
   const nav = useMemo<SettingsPanelNav>(
     () => ({
       go: (route) => {
-        if (PANEL_PAGES[route]) {
+        if (allPages[route]) {
           setStack((pages) => [...pages, route]);
           return;
         }
@@ -201,9 +214,10 @@ export function SettingsGrid({
         // Typed routes are a union of literals; these are known paths.
         router.push(route as never);
       },
-      back: () => setStack((pages) => pages.slice(0, -1)),
+      back: () => setStack((stackNow) => stackNow.slice(0, -1)),
+      close: onClose,
     }),
-    [onClose, router],
+    [allPages, onClose, router],
   );
 
   useEffect(() => {
@@ -249,7 +263,9 @@ export function SettingsGrid({
           <SettingsTiles
             tileHeight={tileHeight}
             onTile={(tile) => {
-              const route = ROUTES[tile];
+              // Hardware and stabilisation open the host's own pages when it
+              // has them; otherwise the host decides.
+              const route = ROUTES[tile] ?? (allPages[`/settings/${tile}`] ? `/settings/${tile}` : null);
               if (route) nav.go(route);
               else onTile(tile);
             }}
@@ -258,7 +274,7 @@ export function SettingsGrid({
           <View style={{ height: tileHeight * 3, borderRadius: 16, overflow: "hidden" }}>
             <SettingsPanelContext.Provider value={nav}>
               {(() => {
-                const Current = PANEL_PAGES[stack.at(-1) ?? ""];
+                const Current = allPages[stack.at(-1) ?? ""];
                 return Current ? <Current /> : null;
               })()}
             </SettingsPanelContext.Provider>

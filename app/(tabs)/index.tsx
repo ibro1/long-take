@@ -2,7 +2,7 @@ import { useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import { useFocusEffect } from "@react-navigation/native";
 import { useKeepAwake } from "expo-keep-awake";
 import { type Href, useRouter } from "expo-router";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   BackHandler,
@@ -50,6 +50,7 @@ import { DrainEstimator } from "@/lib/broadcast/battery-estimate";
 import { listPresets, type Preset, savePreset, subscribePresets } from "@/lib/broadcast/presets";
 import { ImagePanel } from "@/components/broadcast/image-panel";
 import { routeForTile, SettingsGrid } from "@/components/settings/settings-grid";
+import { ChoiceRow, Group, Page, SwitchRow } from "@/components/settings/chrome";
 import { useReadout } from "@/lib/broadcast/readouts";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
@@ -883,6 +884,8 @@ export default function BroadcastScreen() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   /** Filmic's settings grid, opened over the viewfinder from the gear. */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** The page the settings panel opens on, or null for the grid. */
+  const [settingsOpenTo, setSettingsOpenTo] = useState<string | null>(null);
   const [presets, setPresets] = useState<Preset[]>(() => listPresets());
   useEffect(() => subscribePresets(() => setPresets(listPresets())), []);
   const [presetName, setPresetName] = useState("");
@@ -1807,14 +1810,35 @@ export default function BroadcastScreen() {
       <EncoderStatsPanel live={live} onClose={closePanel} />
     );
 
-  /** The drawer: where this is going, and everything that is not on the glass. */
+  const openSettings = (to: string | null = null) => {
+    setSettingsOpenTo(to);
+    setSettingsOpen(true);
+  };
+  /**
+   * Closing the panel is this screen's "coming back": it never lost focus, so
+   * re-read what the panel may have changed - the destination, the viewfinder
+   * preferences, the language.
+   */
+  const closeSettings = () => {
+    setSettingsOpen(false);
+    setSettingsOpenTo(null);
+    setConnection(activeConnection());
+    const prefs = loadPreferences();
+    setGlass(prefs.quickAccess);
+    setViewPrefs(viewPrefsOf(prefs));
+    setLanguage(applyLanguagePreference());
+  };
+
+  /** Where this is going: opens Destinations in the settings panel. */
   const drawerPill = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={t("control.more")}
+      accessibilityLabel={t("control.destinations")}
       accessibilityHint={connection?.name ?? t("destination.choose")}
-      accessibilityState={{ expanded: moreOpen }}
-      onPress={() => setMoreOpen(true)}
+      onPress={() => openSettings("/(tabs)/connections")}
+      // The drawer is the readout strip's tap; holding the pill reaches it
+      // too, for when the strip is switched off or hidden by the heat ladder.
+      onLongPress={() => setMoreOpen(true)}
       hitSlop={8}
       className="max-w-full flex-row items-center gap-1.5 rounded-full px-3 py-1.5 active:opacity-60"
       style={{ backgroundColor: "rgba(10,10,12,0.55)" }}
@@ -2288,7 +2312,7 @@ export default function BroadcastScreen() {
                     <GlassDisc
                       icon={SettingsIcon}
                       label={t("control.settings")}
-                      onPress={() => setSettingsOpen(true)}
+                      onPress={() => openSettings()}
                     />
                     {live ? <LiveStudioChip /> : null}
                     {recording ? (
@@ -2418,7 +2442,7 @@ export default function BroadcastScreen() {
                 icon={SettingsIcon}
                 size={40}
                 label={t("control.settings")}
-                onPress={() => setSettingsOpen(true)}
+                onPress={() => openSettings()}
               />
             </View>
           </SafeAreaView>
@@ -2537,17 +2561,39 @@ export default function BroadcastScreen() {
 
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={moreItems} />
 
-      <SettingsGrid
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onTile={(tile) => {
-          setSettingsOpen(false);
-          const route = routeForTile(tile);
-          // Hardware and stabilisation live on the viewfinder's Camera panel.
-          if (route) router.push(route as Href);
-          else setPanel("camera");
+      <CameraSettingsContext.Provider
+        value={{
+          cameras,
+          selectCamera,
+          autoFocus,
+          setAutoFocus,
+          stabilizationSupported: capabilities?.stabilization ?? false,
+          stabilization,
+          setStabilization,
+          antiFlickerModes,
+          antiFlicker,
+          setAntiFlicker,
+          noiseReductionModes,
+          noiseReduction,
+          setNoiseReduction,
+          hasTorch: capabilities?.torch ?? false,
+          torch,
+          toggleTorch,
         }}
-      />
+      >
+        <SettingsGrid
+          open={settingsOpen}
+          openTo={settingsOpenTo}
+          pages={HOST_PAGES}
+          onClose={closeSettings}
+          onTile={(tile) => {
+            closeSettings();
+            const route = routeForTile(tile);
+            if (route) router.push(route as Href);
+            else setPanel("camera");
+          }}
+        />
+      </CameraSettingsContext.Provider>
     </View>
   );
 }
@@ -2695,6 +2741,105 @@ function EncoderStatsPanel({ live, onClose }: { live: boolean; onClose: () => vo
     </Panel>
   );
 }
+
+/**
+ * The running camera's controls, for the settings panel's Hardware and
+ * Stabilization pages. Those pages drive the live camera, so they are drawn by
+ * this screen (which owns it) and handed to the panel, not routes of their own.
+ */
+type CameraSettings = {
+  cameras: CameraInfo[];
+  selectCamera: (id: string) => void;
+  autoFocus: boolean;
+  setAutoFocus: (on: boolean) => void;
+  stabilizationSupported: boolean;
+  stabilization: boolean;
+  setStabilization: (on: boolean) => void;
+  antiFlickerModes: number[];
+  antiFlicker: number;
+  setAntiFlicker: (mode: number) => void;
+  noiseReductionModes: number[];
+  noiseReduction: number;
+  setNoiseReduction: (mode: number) => void;
+  hasTorch: boolean;
+  torch: boolean;
+  toggleTorch: () => void;
+};
+const CameraSettingsContext = createContext<CameraSettings | null>(null);
+
+function HardwareSettingsPage() {
+  const c = useContext(CameraSettingsContext);
+  if (!c) return null;
+  const current = c.cameras.find((entry) => entry.current);
+  return (
+    <Page title="Hardware">
+      <Group title="Lens">
+        {c.cameras.length > 0 ? (
+          <ChoiceRow
+            label="Camera"
+            value={current?.id ?? ""}
+            options={c.cameras.map((entry) => ({ label: describeCamera(entry), value: entry.id }))}
+            onChange={(id) => c.selectCamera(id)}
+          />
+        ) : null}
+        <SwitchRow
+          label="Auto focus"
+          detail={c.autoFocus ? "The camera keeps the picture sharp" : "Focus is held where it was set"}
+          on={c.autoFocus}
+          onPress={() => c.setAutoFocus(!c.autoFocus)}
+        />
+        {c.hasTorch ? <SwitchRow label="Torch" on={c.torch} onPress={c.toggleTorch} /> : null}
+      </Group>
+      {c.antiFlickerModes.length > 1 ? (
+        <Group title="Anti-flicker" note="Matches the mains frequency so lights do not band.">
+          <ChoiceRow
+            label="Mode"
+            value={c.antiFlicker}
+            options={c.antiFlickerModes.map((mode) => ({ label: describeAntiFlicker(mode), value: mode }))}
+            onChange={c.setAntiFlicker}
+          />
+        </Group>
+      ) : null}
+      {c.noiseReductionModes.length > 1 ? (
+        <Group title="Noise reduction" note="Higher settings smooth a dim room's grain at some cost in detail.">
+          <ChoiceRow
+            label="Mode"
+            value={c.noiseReduction}
+            options={c.noiseReductionModes.map((mode) => ({ label: describeNoiseReduction(mode), value: mode }))}
+            onChange={c.setNoiseReduction}
+          />
+        </Group>
+      ) : null}
+    </Page>
+  );
+}
+
+function StabilizationSettingsPage() {
+  const c = useContext(CameraSettingsContext);
+  if (!c) return null;
+  return (
+    <Page title="Stabilization">
+      <Group
+        note={
+          c.stabilizationSupported
+            ? "Optical where the lens has it, electronic otherwise. Electronic costs a slight crop. Off on a tripod."
+            : "This lens offers no stabilisation."
+        }
+      >
+        <SwitchRow
+          label="Stabilise the picture"
+          on={c.stabilization}
+          onPress={() => c.stabilizationSupported && c.setStabilization(!c.stabilization)}
+        />
+      </Group>
+    </Page>
+  );
+}
+
+const HOST_PAGES = {
+  "/settings/hardware": HardwareSettingsPage,
+  "/settings/stabilization": StabilizationSettingsPage,
+};
 
 /** The preferences the viewfinder acts on, from the Device and Interface pages. */
 function viewPrefsOf(prefs: ReturnType<typeof loadPreferences>) {

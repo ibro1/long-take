@@ -2,9 +2,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useContext } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -31,6 +31,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BackIcon } from "@/components/broadcast/icons";
+import { PanelFrame, SettingsPanelContext } from "@/components/settings/chrome";
 import { Text } from "@/components/ui/text";
 import {
   type AccountLink,
@@ -83,6 +84,9 @@ import { bidi } from "@/lib/i18n";
  */
 export default function ConnectionsScreen() {
   const router = useRouter();
+  /** Set when this screen is drawn inside the viewfinder's settings panel. */
+  const panel = useContext(SettingsPanelContext);
+  const params = useLocalSearchParams<{ scan?: string }>();
   const [connections, setConnections] = useState<Connection[]>(() => listConnections());
   const [activeId, setActiveId] = useState<string | null>(() => activeConnectionId());
   const [scanning, setScanning] = useState(false);
@@ -243,6 +247,20 @@ export default function ConnectionsScreen() {
     setScanning(true);
   }, []);
 
+  // The panel cannot scan - the viewfinder holds the camera - so it sends the
+  // operator here with ?scan=1 and the scanner opens on arrival.
+  useEffect(() => {
+    if (panel || params.scan !== "1") return;
+    router.setParams({ scan: undefined });
+    void (async () => {
+      if (!permission?.granted) {
+        const result = await requestPermission();
+        if (!result.granted) return;
+      }
+      openScanner();
+    })();
+  }, [panel, params.scan, permission?.granted, requestPermission, openScanner, router]);
+
   const onScanned = useCallback(
     async ({ data }: { data: string }) => {
       if (scanned.current) return;
@@ -322,6 +340,10 @@ export default function ConnectionsScreen() {
   }
 
   const scan = async () => {
+    if (panel) {
+      panel.go("/(tabs)/connections?scan=1");
+      return;
+    }
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) return;
@@ -329,8 +351,7 @@ export default function ConnectionsScreen() {
     openScanner();
   };
 
-  return (
-    <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
+  const content = (
       <ScrollView
         contentContainerClassName="gap-4 p-4"
         refreshControl={
@@ -345,6 +366,7 @@ export default function ConnectionsScreen() {
       >
         {/* The way back. This screen used to be a tab, and the tab bar was the
             way out of it; the bar is gone, so the screen has to carry one. */}
+        {panel ? null : (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back to the viewfinder"
@@ -354,8 +376,9 @@ export default function ConnectionsScreen() {
           <BackIcon className="h-5 w-5 text-foreground" />
           <Text className="text-base">Viewfinder</Text>
         </Pressable>
+        )}
 
-        <Text className="text-2xl font-bold">Where to send it</Text>
+        {panel ? null : <Text className="text-2xl font-bold">Where to send it</Text>}
 
         {/* The account first, because it is the one that keeps up: every
             stream on the dashboard arrives here and stays named the same.
@@ -523,7 +546,8 @@ export default function ConnectionsScreen() {
               onPress={() => {
                 setActiveConnection(connection.id);
                 setActiveId(connection.id);
-                router.push("/(tabs)");
+                if (panel) panel.close();
+                else router.push("/(tabs)");
               }}
               className={`gap-1 rounded-2xl border bg-card p-4 ${
                 chosen || fallback ? "border-foreground" : "border-border"
@@ -578,6 +602,15 @@ export default function ConnectionsScreen() {
           );
         })}
       </ScrollView>
+  );
+
+  // In the settings panel the panel's frame carries the title and the way
+  // back; as a screen of its own it keeps its full-screen frame.
+  if (panel) return <PanelFrame title="Destinations">{content}</PanelFrame>;
+
+  return (
+    <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
+      {content}
     </SafeAreaView>
   );
 }

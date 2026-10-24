@@ -104,6 +104,8 @@ export type SettingsPanelNav = {
   go: (route: string) => void;
   /** One page back; from the first page, back to the grid. */
   back: () => void;
+  /** Close the panel and return to the viewfinder. */
+  close: () => void;
 };
 export const SettingsPanelContext = createContext<SettingsPanelNav | null>(null);
 
@@ -119,7 +121,48 @@ export function useSettingsNav(): SettingsPanelNav {
     // Typed routes are a union of literals; these pages pass known paths.
     go: (route) => router.push(route as never),
     back: () => (router.canGoBack() ? router.back() : router.replace("/(tabs)")),
+    close: () => router.navigate("/(tabs)"),
   };
+}
+
+/**
+ * A page's frame inside the settings panel: a slim header with the way back
+ * and the title, over the body. Page uses it with its own scroller; a screen
+ * that has its own scroller (Destinations) uses it directly.
+ */
+export function PanelFrame({
+  title,
+  action,
+  children,
+}: {
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  const panel = useContext(SettingsPanelContext);
+  return (
+    <View className="flex-1" style={[LIGHT_VARS, { backgroundColor: paper.page }]}>
+      <View
+        className="flex-row items-center gap-1 border-b border-hairline px-2 py-1"
+        style={HAIRLINE}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={panel?.back}
+          hitSlop={8}
+          className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
+        >
+          <ChevronLeft size={22} color={paper.ink} />
+        </Pressable>
+        <Text className="flex-1 font-semibold" style={{ color: paper.ink, fontSize: 16 }}>
+          {title}
+        </Text>
+        {action}
+      </View>
+      {children}
+    </View>
+  );
 }
 
 export function Page({
@@ -160,25 +203,7 @@ export function Page({
   const panel = useContext(SettingsPanelContext);
   if (panel) {
     return (
-      <View className="flex-1" style={[LIGHT_VARS, { backgroundColor: paper.page }]}>
-        <View
-          className="flex-row items-center gap-1 border-b border-hairline px-2 py-1"
-          style={HAIRLINE}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            onPress={panel.back}
-            hitSlop={8}
-            className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
-          >
-            <ChevronLeft size={22} color={paper.ink} />
-          </Pressable>
-          <Text className="flex-1 font-semibold" style={{ color: paper.ink, fontSize: 16 }}>
-            {title}
-          </Text>
-          {action}
-        </View>
+      <PanelFrame title={title} action={action}>
         <ScrollView className="flex-1" contentContainerClassName="gap-4 p-3 pb-6">
           {intro ? (
             <Text className="px-1" style={DETAIL}>
@@ -187,7 +212,7 @@ export function Page({
           ) : null}
           {children}
         </ScrollView>
-      </View>
+      </PanelFrame>
     );
   }
 
