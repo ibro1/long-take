@@ -42,6 +42,10 @@ function tint(tone: Tint): string {
 
 // ---------------------------------------------------------------------------
 
+// Press feedback goes through className (`active:opacity-60`), never a style
+// function: nativewind's Pressable wrapper drops `style={({ pressed }) => ...}`
+// entirely, which took the ring, the disc fill and the info panel's row layout
+// with it on the first build.
 export function RingButton({
   icon,
   label,
@@ -70,7 +74,8 @@ export function RingButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: !!active }}
-      style={({ pressed }) => [
+      className="active:opacity-60"
+      style={[
         styles.center,
         {
           width: size,
@@ -78,7 +83,6 @@ export function RingButton({
           borderRadius: size / 2,
           borderWidth: 2,
           borderColor: color ?? RING,
-          opacity: pressed ? 0.6 : 1,
         },
       ]}
     >
@@ -112,14 +116,14 @@ export function GlassDisc({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: !!active }}
-      style={({ pressed }) => [
+      className="active:opacity-60"
+      style={[
         styles.center,
         {
           width: size,
           height: size,
           borderRadius: size / 2,
           backgroundColor: DISC_FILL,
-          opacity: pressed ? 0.6 : 1,
         },
       ]}
     >
@@ -187,7 +191,8 @@ export function ColorDiamond({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: !!active }}
-      style={({ pressed }) => [styles.center, { width: 60, height: 60, opacity: pressed ? 0.6 : 1 }]}
+      className="active:opacity-60"
+      style={[styles.center, { width: 60, height: 60 }]}
     >
       <View
         style={[
@@ -301,11 +306,8 @@ export function InfoPanel({
       disabled={!onPress}
       accessibilityRole="button"
       accessibilityLabel={summary}
-      style={({ pressed }) => [
-        styles.panel,
-        warn ? { borderWidth: 1, borderColor: filmic.color.accent } : null,
-        { opacity: pressed ? 0.6 : 1 },
-      ]}
+      className="active:opacity-60"
+      style={[styles.panel, warn ? { borderWidth: 1, borderColor: filmic.color.accent } : null]}
     >
       <View>
         {/* FPS hangs off the top of the number, the way Filmic sets it, so the

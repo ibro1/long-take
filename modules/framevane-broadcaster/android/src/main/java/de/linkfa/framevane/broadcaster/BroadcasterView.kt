@@ -48,6 +48,9 @@ internal const val LOG_INFO = "info"
 internal const val LOG_WARN = "warn"
 internal const val LOG_ERROR = "error"
 
+/** How long after a surface resize the preview size is re-asserted - after the posted re-shape. */
+private const val PREVIEW_REFIT_MS = 400L
+
 /** The spot meter's sample bitmap side: 16x16 = 256 pixels to average. */
 private const val METER_SIDE = 16
 
@@ -578,6 +581,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
          * callback still on the stack.
          */
         post { syncAutoOrientation() }
+        postDelayed({ fitPreviewToSurface() }, PREVIEW_REFIT_MS)
       }
 
       override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -991,6 +995,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         // camera's own defaults.
         reapplyCaptureRequest()
       }
+      fitPreviewToSurface()
       /**
        * The meter goes back on whether or not the encoder liked the settings.
        *
@@ -1552,6 +1557,25 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   fun clearMonitorForAir() {
     if (monitorFilter != null) setMonitor("off")
+  }
+
+  // --- Preview fit -------------------------------------------------------
+
+  /**
+   * Tells the renderer the size of the surface it is actually drawing into.
+   *
+   * A freshly installed app opens in portrait and is turned to landscape, and
+   * the viewfinder came up as a strip along the top: the renderer was still
+   * fitting the picture into the 1080x2400 surface it started on, inside a
+   * 2400x1080 one. surfaceChanged does tell it, but a configure that follows
+   * (the rotation re-shapes the encoder) can restart the preview inside the
+   * library at the size it cached - and with the preview still "on", nothing
+   * here noticed. Re-asserting the real size afterwards is idempotent and cheap.
+   */
+  private fun fitPreviewToSurface() {
+    val frame = surfaceView.holder.surfaceFrame
+    if (frame.width() <= 0 || frame.height() <= 0 || !stream.isOnPreview) return
+    runCatching { stream.getGlInterface().setPreviewResolution(frame.width(), frame.height()) }
   }
 
   // --- Spot metering ----------------------------------------------------

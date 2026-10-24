@@ -821,8 +821,18 @@ export default function BroadcastScreen() {
    * The picture area the reticles may use: between the Filmic side columns in
    * landscape, between the head-up band and the dock in portrait.
    */
+  /**
+   * The landscape columns' real widths, measured: each is a SafeAreaView, so on
+   * a phone with a cutout it is wider than its content by the inset - and
+   * `useSafeAreaInsets` is not available here (no provider; see micBottom). The
+   * picture's own chrome is offset from these, not from the constants, or it
+   * slides under the columns by exactly the cutout.
+   */
+  const [lead, setLead] = useState(LEFT_COLUMN);
+  const [trail, setTrail] = useState(COLUMN);
+
   const reticleInsets = wide
-    ? { left: LEFT_COLUMN, right: COLUMN, top: 0, bottom: 0 }
+    ? { left: lead, right: trail, top: 0, bottom: 0 }
     : { left: 0, right: 0, top: 72, bottom: 230 };
 
   // Nothing yet, rather than the wrong thing. The check takes a frame or two.
@@ -1843,7 +1853,7 @@ export default function BroadcastScreen() {
         <View
           pointerEvents="none"
           className="absolute inset-y-0 items-center justify-center"
-          style={{ left: wide ? LEFT_COLUMN : 0, right: wide ? COLUMN : 0 }}
+          style={{ left: wide ? lead : 0, right: wide ? trail : 0 }}
         >
           <View className="h-28 w-28 items-center justify-center rounded-full border border-filmic-line bg-filmic-surface/80">
             <Mono className="text-6xl font-bold text-white">{counting}</Mono>
@@ -1932,7 +1942,7 @@ export default function BroadcastScreen() {
       <View
           pointerEvents="box-none"
           className="gap-1.5 px-3 pt-1.5"
-          style={wide ? { marginLeft: LEFT_COLUMN + 64, marginRight: COLUMN + 64, marginTop: 58 } : undefined}
+          style={wide ? { marginLeft: lead + 64, marginRight: trail + 64, marginTop: 58 } : undefined}
         >
           {/*
             One banner, the worst - see lib/broadcast/banners.ts for the order
@@ -2127,7 +2137,7 @@ export default function BroadcastScreen() {
           pointerEvents="box-none"
           style={
             wide
-              ? { position: "absolute", top: 72, right: COLUMN + 12 }
+              ? { position: "absolute", top: 72, right: trail + 12 }
               : { position: "absolute", left: 0, right: 0, bottom: 250, alignItems: "center" }
           }
         >
@@ -2144,12 +2154,12 @@ export default function BroadcastScreen() {
           pointerEvents="box-none"
           edges={["top", "bottom", "left"]}
           className="absolute bottom-0 top-0"
-          style={{ left: LEFT_COLUMN }}
+          style={{ left: lead }}
         >
           <View
             pointerEvents="box-none"
             className="h-full justify-center pl-3 pr-2"
-            style={{ width: width - COLUMN - LEFT_COLUMN - 8 }}
+            style={{ width: width - trail - lead - 8 }}
           >
             {panelBody}
           </View>
@@ -2163,7 +2173,7 @@ export default function BroadcastScreen() {
         <View
           pointerEvents="none"
           className="absolute"
-          style={{ bottom: 86, left: LEFT_COLUMN, width: width - COLUMN - LEFT_COLUMN }}
+          style={{ bottom: 86, left: lead, width: width - trail - lead }}
         >
           <Notice text={notice.text} at={notice.at} tone={notice.tone} />
         </View>
@@ -2182,6 +2192,7 @@ export default function BroadcastScreen() {
             pointerEvents="box-none"
             edges={["top", "left", "bottom"]}
             className="absolute bottom-0 left-0 top-0 bg-filmic-base"
+            onLayout={(e) => setLead(Math.round(e.nativeEvent.layout.width))}
           >
             <View
               pointerEvents="box-none"
@@ -2212,6 +2223,7 @@ export default function BroadcastScreen() {
             pointerEvents="box-none"
             edges={["top", "right", "bottom"]}
             className="absolute bottom-0 right-0 top-0 bg-filmic-base"
+            onLayout={(e) => setTrail(Math.round(e.nativeEvent.layout.width))}
           >
             <View
               pointerEvents="box-none"
@@ -2265,7 +2277,7 @@ export default function BroadcastScreen() {
           <View
             pointerEvents="box-none"
             className="absolute bottom-0 top-0"
-            style={{ left: LEFT_COLUMN, right: COLUMN }}
+            style={{ left: lead, right: trail }}
           >
             <SafeAreaView pointerEvents="box-none" edges={["top", "bottom"]} className="flex-1">
               <View pointerEvents="box-none" className="flex-1">
