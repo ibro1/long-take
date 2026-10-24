@@ -20,6 +20,7 @@ import type {
   LogEntry,
   LogEvent,
   LogLevel,
+  MonitorMode,
   Orientation,
   PowerState,
   RecordEvent,
@@ -50,6 +51,7 @@ export type {
   LogEntry,
   LogEvent,
   LogLevel,
+  MonitorMode,
   Orientation,
   PowerState,
   RecordEvent,
@@ -263,6 +265,20 @@ export function setExposure(value: number): Promise<void> {
  */
 export function setFocusDistance(dioptres: number): Promise<void> {
   return native.setFocusDistance(dioptres);
+}
+
+/**
+ * A display-only viewfinder aid over the preview: "peaking" highlights the
+ * in-focus edges in red, "off" clears it. It is never encoded - going live or
+ * recording clears it on the native side.
+ */
+export function setMonitor(mode: MonitorMode): Promise<void> {
+  return native.setMonitor(mode);
+}
+
+/** The monitoring aid currently applied. */
+export function monitorMode(): MonitorMode {
+  return native.monitorMode();
 }
 
 /** Gives focus back to the camera. */

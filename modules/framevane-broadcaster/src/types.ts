@@ -118,6 +118,9 @@ export type CameraCapabilities = {
 
 export type Orientation = "auto" | "portrait" | "landscape";
 
+/** A display-only viewfinder aid. Grows as zebras and false colour land. */
+export type MonitorMode = "off" | "peaking";
+
 /**
  * H.265 is half the bitrate for the same picture and every platform Framevane
  * fans out to accepts it - but not every phone encodes it, and the compositor

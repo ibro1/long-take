@@ -32,6 +32,7 @@ import { BatteryBar } from "@/components/broadcast/battery";
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { ExposureRail, type FocusPoint } from "@/components/broadcast/exposure-rail";
 import { EdgeRails, type Rail } from "@/components/broadcast/edge-rails";
+import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
 import { plainFailure } from "@/lib/broadcast/failure";
 import { guardFor, preflightGuards } from "@/lib/broadcast/guards";
@@ -100,7 +101,9 @@ import {
   type AudioDevice,
   BroadcasterView,
   type CameraInfo,
+  type MonitorMode,
   type Orientation,
+  setMonitor,
 } from "@/modules/framevane-broadcaster";
 
 /** Named apart from the Panel component: one is a box, this is which box. */
@@ -769,6 +772,17 @@ export default function BroadcastScreen() {
    * picture.
    */
   const [rail, setRail] = useState<Rail>(null);
+
+  // Display-only monitoring (focus peaking). The native side clears it on air;
+  // this keeps the control in step and resets it when a broadcast starts.
+  const [monitor, setMonitorMode] = useState<MonitorMode>("off");
+  const applyMonitor = useCallback((mode: MonitorMode) => {
+    setMonitorMode(mode);
+    void setMonitor(mode).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (live && monitor !== "off") setMonitorMode("off");
+  }, [live, monitor]);
 
   const [focusPoint, setFocusPoint] = useState<FocusPoint | null>(null);
   const [focusFrame, setFocusFrame] = useState({ width: 0, height: 0 });
@@ -2045,6 +2059,17 @@ export default function BroadcastScreen() {
             onFocusDistance={setFocusDistance}
             onAutoFocus={resumeAutoFocus}
           />
+        ) : null}
+
+        {/* The monitoring aids, as a pill above the bottom dock. Cleared and
+            disabled on air - a focusing help, not something that goes out. */}
+        {panel === null ? (
+          <View
+            pointerEvents="box-none"
+            style={{ position: "absolute", left: 0, right: 0, bottom: 120, alignItems: "center" }}
+          >
+            <MonitoringSelector value={monitor} onChange={applyMonitor} disabled={live} />
+          </View>
         ) : null}
 
         {/*
