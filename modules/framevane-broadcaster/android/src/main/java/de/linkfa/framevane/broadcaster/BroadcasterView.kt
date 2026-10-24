@@ -170,8 +170,84 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    * causes the next stall.
    */
   var adaptiveBitrate = true
+
+  /**
+   * What the encoder is aiming at right now, after adaptation and the thermal
+   * cap. Volatile because the cap can move it from the JavaScript thread while
+   * the bitrate tick reads and writes it on the stream client's.
+   */
+  @Volatile
   private var currentBitrate = 0
   private var healthyTicks = 0
+
+  /**
+   * The highest bitrate the encoder may be asked for: the configured one, or
+   * the thermal ladder's share of it while a cap is set.
+   *
+   * Every place that hands the encoder a bitrate goes through this - prepare,
+   * the first connection, the adaptive climb, the operator's own change - so a
+   * cap set because the phone is overheating cannot be undone by the uplink
+   * clearing and [adapt] climbing back to full quality. A hot phone encoding
+   * fewer bits is the cheapest heat there is to shed, and the cap is only
+   * worth anything if nothing quietly walks around it.
+   */
+  internal fun bitrateCeiling(): Int {
+    val cap = thermalBitrateCap
+    if (cap >= 1.0) return videoBitrate
+    return (videoBitrate * cap).toInt().coerceAtLeast(1)
+  }
+
+  /**
+   * Puts the encoder under the current cap, now, mid-broadcast if need be.
+   *
+   * `setVideoBitrateOnFly` is a MediaCodec parameter change on the running
+   * encoder - the same call [adapt] makes every congested second - and in
+   * 2.7.0 it does nothing at all when the encoder is not running, so it is
+   * safe to make whatever the state. An encoder that is not running picks the
+   * cap up at its next [prepare], which configures it at [bitrateCeiling].
+   *
+   * Lowering takes effect at once. Lifting the cap with adaptive bitrate on
+   * does not jump straight back: the adapted rate is kept and [adapt] climbs
+   * the rest of the way at its usual pace, because a jump to full rate on a
+   * link that has been carrying less is how the next stall starts. With
+   * adaptation off there is no climb to wait for, so the encoder goes straight
+   * to the new ceiling.
+   */
+  internal fun applyBitrateCap() {
+    val ceiling = bitrateCeiling()
+    val target = if (adaptiveBitrate && currentBitrate > 0) {
+      currentBitrate.coerceAtMost(ceiling)
+    } else {
+      ceiling
+    }
+    if (stream.isStreaming) currentBitrate = target
+    runCatching { stream.setVideoBitrateOnFly(target) }.onFailure {
+      log(LOG_WARN, "Could not change the encoder's bitrate: ${it.message}")
+      return
+    }
+    if (stream.isStreaming || stream.isRecording) {
+      log(
+        LOG_INFO,
+        if (thermalBitrateCap >= 1.0) "Thermal bitrate cap lifted; aiming at ${target / 1000} kbps"
+        else "Thermal bitrate cap ${(thermalBitrateCap * 100).roundToInt()}%; encoder at ${target / 1000} kbps",
+      )
+    }
+  }
+
+  /**
+   * The operator's own bitrate change, under the cap.
+   *
+   * The configured rate becomes what was asked for - it is what the cap is a
+   * fraction of, and what the stream goes back to once the phone cools - but
+   * the encoder is only handed as much of it as the cap allows.
+   */
+  internal fun changeVideoBitrate(bitrate: Int) {
+    videoBitrate = bitrate
+    if (!stream.isStreaming) return
+    val applied = bitrate.coerceAtMost(bitrateCeiling())
+    currentBitrate = applied
+    stream.setVideoBitrateOnFly(applied)
+  }
 
   /** Whether the encoder has been configured since the last settings change. */
   private var prepared = false
@@ -427,6 +503,78 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   internal var exposureLocked = false
 
   /**
+   * The exposure compensation the operator last set, in the camera's steps.
+   *
+   * Kept here for the same reason as the lock: the capture request is rebuilt
+   * from the template on every lens open and preview restart, and with it the
+   * compensation goes back to zero - and manual exposure needs it held
+   * somewhere other than a request that is ignoring it. See `setExposure`.
+   */
+  internal var exposureCompensation = 0
+
+  /**
+   * Manual exposure: whether it is on, and the ISO and shutter the operator
+   * asked for.
+   *
+   * The values asked for, not the values applied. Each lens clamps them to its
+   * own ranges when they are put on a capture request - see
+   * [reapplyCaptureRequest] - so an operator who set ISO 3200 on a lens that
+   * stops at 1600 gets 3200 back when they switch to one that goes that far,
+   * rather than the first lens's limit carried over as though they had asked
+   * for it. What the sensor is actually doing is reported by `onExposureState`.
+   *
+   * Volatile because the capture-result callback reads [manualExposure] on
+   * whichever thread the camera delivers results to.
+   */
+  @Volatile
+  internal var manualExposure = false
+  @Volatile
+  internal var manualIso = 0
+  @Volatile
+  internal var manualExposureNs = 0L
+
+  /**
+   * White balance by colour temperature, and the temperature and tint asked
+   * for. See `setWhiteBalanceKelvin` for how they become gains.
+   */
+  @Volatile
+  internal var kelvinWhiteBalance = false
+  internal var whiteBalanceKelvin = DEFAULT_KELVIN
+  internal var whiteBalanceTint = 0.0
+
+  /**
+   * The colour matrix each lens's own white balance last chose, by camera id.
+   *
+   * Turning AWB off hands the colour pipeline to the request, matrix and all,
+   * and the matrix is the sensor-RGB-to-sRGB conversion that makes skin look
+   * like skin. Identity there leaves every colour flat and slightly wrong, on
+   * every phone. The camera reports the matrix it is using in every capture
+   * result while AWB is on, so it is kept from there - per lens, because a
+   * matrix is a property of the sensor behind it - and used under the kelvin
+   * gains. Identity is the fallback for a lens that has never been seen in
+   * auto, which is exactly what the operator asked for in the first place.
+   */
+  internal val autoColorTransforms =
+    java.util.concurrent.ConcurrentHashMap<String, android.hardware.camera2.params.ColorSpaceTransform>()
+
+  /**
+   * Whether RootEncoder took the capture-result callback, which is what makes
+   * `onExposureState` report the sensor rather than the request. See
+   * [watchCaptureResults].
+   */
+  internal var captureResultsWired = false
+
+  /**
+   * What the sensor is actually exposing at, pushed at most twice a second
+   * while the preview runs. See [onCaptureResult].
+   */
+  internal val onExposureState by EventDispatcher()
+
+  /** When the last capture result was looked at; see [onCaptureResult]. */
+  @Volatile
+  private var lastCaptureResultAt = 0L
+
+  /**
    * Frames per second measured from what has actually left the phone.
    *
    * Sampled once a second off the bitrate tick, because that is a clock the
@@ -658,6 +806,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
     watchAudioDevices()
     watchCamera()
+    watchCaptureResults()
 
     /**
      * An encoder that has died is the one failure that looks exactly like a
@@ -731,6 +880,118 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         }
       })
     }.onFailure { log(LOG_WARN, "Could not watch the camera: ${it.message}") }
+  }
+
+  /**
+   * Listens to the camera's capture results, for `onExposureState`.
+   *
+   * RootEncoder owns the capture session, but 2.7.0 does expose its results:
+   * `Camera2Source.setCustomOnCaptureCompletedCallback` stores a callback that
+   * the library's own CaptureCallback calls from `onCaptureCompleted` with
+   * every TotalCaptureResult. The library attaches that CaptureCallback to the
+   * repeating request whenever this callback is set (or face detection or a
+   * frame callback is), both when the session starts and on every later
+   * request change - read from its bytecode, `startPreview$lambda$1` and
+   * `applyRequest`. The field is never cleared by `closeCamera`, so set once
+   * here it holds across every lens change, preview restart and rotation.
+   *
+   * Set before any session exists on purpose. It only takes effect when a
+   * repeating request is (re)issued, and the session's first request is the
+   * one that will always be issued.
+   *
+   * One side effect worth knowing. With a callback attached, `applyRequest`
+   * passes a null Handler, so Camera2 delivers results on the looper of
+   * whichever thread last changed the request - Expo's module queue, the
+   * JavaScript thread, or the main thread - and a thread with no looper would
+   * have the request refused. Every caller in this module is on one of those
+   * three, all of which have loopers, and [onCaptureResult] returns within a
+   * clock read on all but two frames a second, so the cost on whichever thread
+   * it lands is a message and a comparison.
+   */
+  private fun watchCaptureResults() {
+    runCatching {
+      camera.setCustomOnCaptureCompletedCallback { _, _, result -> onCaptureResult(result) }
+      captureResultsWired = true
+    }.onFailure {
+      log(LOG_WARN, "Could not read the camera's capture results: ${it.message}")
+    }
+  }
+
+  /**
+   * One capture result. Most are ignored; twice a second the sensor's actual
+   * ISO and shutter go to JavaScript.
+   *
+   * Throttled here rather than in JavaScript because this runs on every frame,
+   * thirty or sixty times a second, and the bridge is the expensive part. Half
+   * a second is quicker than an operator reads a number and slow enough that
+   * the event is no load on the JavaScript thread an hour in.
+   *
+   * The values are the result's, not the request's: in auto they are what the
+   * metering chose, and in manual they are what the sensor actually took after
+   * its own clamping - which is the honest readout either way. `manual` is the
+   * result's AE mode for the same reason, with the stored flag only as a
+   * fallback for a result that does not carry it.
+   *
+   * Nothing is sent while the view is detached or its surface is gone: a
+   * detached view queues posted work until it is attached again, and an hour
+   * of a backgrounded broadcast would come back as seven thousand stale
+   * readings delivered at once.
+   *
+   * Also where each lens's own colour matrix is collected; see
+   * [autoColorTransforms].
+   *
+   * Caught whole, because this is a camera thread with nothing above it.
+   */
+  private fun onCaptureResult(result: android.hardware.camera2.TotalCaptureResult) {
+    runCatching {
+      val now = android.os.SystemClock.uptimeMillis()
+      if (now - lastCaptureResultAt < EXPOSURE_EVENT_MS) return
+      lastCaptureResultAt = now
+
+      if (result.get(android.hardware.camera2.CaptureResult.CONTROL_AWB_MODE) ==
+        CameraCharacteristics.CONTROL_AWB_MODE_AUTO
+      ) {
+        val id: String? = camera.getCurrentCameraId()
+        val transform = result.get(android.hardware.camera2.CaptureResult.COLOR_CORRECTION_TRANSFORM)
+        if (id != null && transform != null) autoColorTransforms[id] = transform
+      }
+
+      if (previewGone || !isAttachedToWindow) return
+      val iso = result.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY)
+      val exposureNs = result.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME)
+      val manual = result.get(android.hardware.camera2.CaptureResult.CONTROL_AE_MODE)
+        ?.let { it == CameraCharacteristics.CONTROL_AE_MODE_OFF }
+        ?: manualExposure
+      if (iso == null || exposureNs == null) {
+        // A HAL that leaves these out of its results (they are optional
+        // outside MANUAL_SENSOR) still owes the operator the numbers they set.
+        if (manualExposure) emitRequestedExposure()
+        return
+      }
+      val event = mapOf(
+        "iso" to iso,
+        "exposureNs" to exposureNs.toDouble(),
+        "manual" to manual,
+      )
+      post { runCatching { onExposureState(event) } }
+    }
+  }
+
+  /**
+   * The requested manual values as an `onExposureState`, for when the
+   * capture results cannot say what the sensor did - the callback was not
+   * taken, or the camera leaves the values out. Auto exposure has no such
+   * fallback: inventing what the meter chose would be a reading with nothing
+   * behind it.
+   */
+  internal fun emitRequestedExposure() {
+    if (!manualExposure || previewGone || !isAttachedToWindow) return
+    val event = mapOf(
+      "iso" to manualIso,
+      "exposureNs" to manualExposureNs.toDouble(),
+      "manual" to true,
+    )
+    post { runCatching { onExposureState(event) } }
   }
 
   private fun onCameraGone(why: String) {
@@ -923,7 +1184,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       val video = stream.prepareVideo(
         width = videoWidth,
         height = videoHeight,
-        bitrate = videoBitrate,
+        // Under the thermal cap from the first frame, rather than starting at
+        // full rate and being pulled down a second later; see [bitrateCeiling].
+        bitrate = bitrateCeiling(),
         fps = videoFps,
         recordWidth = recordSize?.first ?: videoWidth,
         recordHeight = recordSize?.second ?: videoHeight,
@@ -1561,6 +1824,11 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   // colour maps luma to an exposure palette, clipping paints red wherever any
   // single colour channel has hit the ceiling.
 
+  /**
+   * Volatile because [applyMonitorOptions] reads it from the JavaScript thread
+   * while [setMonitor] writes it from Expo's module queue.
+   */
+  @Volatile
   private var monitorFilter: BaseFilterRender? = null
 
   /** The monitoring mode actually applied: "off", "peaking", "zebra", "falsecolor" or "clipping". */
@@ -1590,11 +1858,20 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       gl.clearFilters()
       monitorFilter = null
       val f: BaseFilterRender? = when (mode) {
-        // Thresholded Sobel: a thin red outline on only the sharp focal plane,
+        // Thresholded Sobel: a thin outline on only the sharp focal plane,
         // not the library's flood of every edge. See [PeakingFilterRender].
-        "peaking" -> PeakingFilterRender(255, 48, 48)
-        // Marching stripes over blown highlights.
-        "zebra" -> ZebraFilterRender()
+        // Colour and threshold are the operator's, from [MonitorOptions].
+        "peaking" -> {
+          val rgb = MonitorOptions.peakingColor
+          PeakingFilterRender(
+            (rgb shr 16) and 0xff,
+            (rgb shr 8) and 0xff,
+            rgb and 0xff,
+            MonitorOptions.peakingThreshold,
+          )
+        }
+        // Marching stripes over blown highlights, at the operator's level.
+        "zebra" -> ZebraFilterRender(MonitorOptions.zebraThreshold)
         // Luma -> IRE exposure palette.
         "falsecolor" -> FalseColorFilterRender()
         // Solid red wherever any one channel has blown; see [ClippingFilterRender]
@@ -1617,6 +1894,27 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   fun clearMonitorForAir() {
     if (monitorFilter != null) setMonitor("off")
+  }
+
+  /**
+   * Pushes [MonitorOptions] into the aid on screen, if it is one that has
+   * them.
+   *
+   * Into the live filter rather than by rebuilding it: the operator tunes
+   * peaking and zebras by watching them, and a rebuild per slider step would
+   * recompile the shader and blink the viewfinder each time. The filters read
+   * these on the GL thread every frame, so the next frame shows the change.
+   * Filters made later read [MonitorOptions] when they are built.
+   */
+  internal fun applyMonitorOptions() {
+    when (val f = monitorFilter) {
+      is PeakingFilterRender -> {
+        f.setColor(MonitorOptions.peakingColor)
+        f.threshold = MonitorOptions.peakingThreshold
+      }
+      is ZebraFilterRender -> f.threshold = MonitorOptions.zebraThreshold
+      else -> Unit
+    }
   }
 
   // --- Capture size ------------------------------------------------------
@@ -1653,9 +1951,22 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     val neededW = maxOf(videoWidth, record?.first ?: 0)
     val neededH = maxOf(videoHeight, record?.second ?: 0)
     val larger = captureW.toLong() * captureH > neededW.toLong() * neededH
+    /**
+     * Where a capture above the stream comes from, said rather than left to
+     * be worked out. In 2.7.0 there is exactly one way: the camera is opened
+     * at max(stream, record), and the record size differs from the stream only
+     * when [recordHeight] is a rung other than the stream's own height -
+     * `recordSizeFor` answers null for 0 ("same as the broadcast") and for the
+     * stream's height, and only `setRecordingQuality` ever sets it. So a
+     * capture above the stream is always the operator's recording quality, and
+     * the line names it, because the heat it costs is otherwise invisible.
+     */
+    val recordDriven = record != null &&
+      record.first.toLong() * record.second > videoWidth.toLong() * videoHeight
     val summary = "Camera captures ${captureW}x${captureH} for a ${videoWidth}x${videoHeight} stream" +
       (record?.let { " (recording ${it.first}x${it.second})" } ?: "") +
       ", rotation ${preparedRotation}, preview surface ${previewWidth}x${previewHeight}" +
+      (if (recordDriven) "; the ${recordHeight}p recording quality is what sizes the camera above the stream" else "") +
       if (larger) "; the camera is capturing more than the encoders use" else ""
     if (summary == lastCaptureSummary) return
     lastCaptureSummary = summary
@@ -2331,7 +2642,15 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     // `connectedOnce` rather than the attempt count: a first connection that
     // needed a retry has no adapted rate of its own, only whatever the last
     // broadcast happened to end on.
-    if (!connectedOnce || currentBitrate <= 0) currentBitrate = videoBitrate
+    if (!connectedOnce || currentBitrate <= 0) currentBitrate = bitrateCeiling()
+    /**
+     * And never above the thermal cap, whichever of the two it was. The
+     * encoder was configured at the ceiling of the moment it was prepared, and
+     * the cap may have moved since - so the rate is handed to it again here.
+     * A no-op where nothing changed.
+     */
+    currentBitrate = currentBitrate.coerceAtMost(bitrateCeiling())
+    runCatching { stream.setVideoBitrateOnFly(currentBitrate) }
     connectedOnce = true
     lastFailure = ""
     healthyTicks = 0
@@ -2609,11 +2928,25 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   private fun adapt() {
     val client = stream.getStreamClient()
-    if (currentBitrate <= 0) currentBitrate = videoBitrate
+    /**
+     * The climb's ceiling is the thermal cap's, not the configured rate: the
+     * uplink clearing is no reason to undo a cap set because the phone is hot.
+     * See [bitrateCeiling].
+     */
+    val ceiling = bitrateCeiling()
+    if (currentBitrate <= 0) currentBitrate = ceiling
+    if (currentBitrate > ceiling) {
+      // The cap came down between ticks and [applyBitrateCap] has not yet been
+      // seen here; never ask for more than it allows, even for one second.
+      currentBitrate = ceiling
+      stream.setVideoBitrateOnFly(ceiling)
+    }
 
     if (client.hasCongestion()) {
       healthyTicks = 0
-      val reduced = (currentBitrate * 0.8).toInt().coerceAtLeast(MIN_BITRATE)
+      // The floor gives way to the cap: a quarter of a low configured rate can
+      // be under MIN_BITRATE, and the cap is the one that must hold.
+      val reduced = (currentBitrate * 0.8).toInt().coerceAtLeast(minOf(MIN_BITRATE, ceiling))
       if (reduced < currentBitrate) {
         currentBitrate = reduced
         stream.setVideoBitrateOnFly(reduced)
@@ -2623,11 +2956,11 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     }
 
     healthyTicks += 1
-    if (healthyTicks < HEALTHY_TICKS_BEFORE_RECOVERY || currentBitrate >= videoBitrate) return
+    if (healthyTicks < HEALTHY_TICKS_BEFORE_RECOVERY || currentBitrate >= ceiling) return
 
     healthyTicks = 0
-    val raised = (currentBitrate + (videoBitrate - currentBitrate) * 0.2).toInt()
-    currentBitrate = raised.coerceAtMost(videoBitrate)
+    val raised = (currentBitrate + (ceiling - currentBitrate) * 0.2).toInt()
+    currentBitrate = raised.coerceAtMost(ceiling)
     stream.setVideoBitrateOnFly(currentBitrate)
     log(LOG_INFO, "Uplink clear; bitrate back up to ${currentBitrate / 1000} kbps")
   }
@@ -2688,6 +3021,12 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     /** Long enough for a working microphone to have produced many buffers. */
     private const val SILENCE_CHECK_MS = 2_500L
 
+    /** `onExposureState` at most twice a second; see [onCaptureResult]. */
+    private const val EXPOSURE_EVENT_MS = 500L
+
+    /** Daylight, where a kelvin control starts before the operator moves it. */
+    internal const val DEFAULT_KELVIN = 5_500.0
+
     /**
      * How often `onLevel` goes to JavaScript, in milliseconds; 0 for never.
      *
@@ -2707,6 +3046,27 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     internal var levelEventIntervalMs = DEFAULT_LEVEL_INTERVAL_MS
 
     internal const val DEFAULT_LEVEL_INTERVAL_MS = 250L
+
+    /**
+     * The thermal ladder's bitrate cap, as a fraction of the configured
+     * bitrate: 1 is no cap, 0.25 the floor. See [bitrateCeiling].
+     *
+     * On the companion for the same reason as [levelEventIntervalMs]: the
+     * ladder sets it when the phone heats up, and the preview being rebuilt by
+     * a tab change must not hand a hot phone its full bitrate back. Volatile
+     * because the JavaScript thread writes it and the stream client's bitrate
+     * tick reads it.
+     */
+    @Volatile
+    internal var thermalBitrateCap = 1.0
+
+    /** Clamps a fraction from JavaScript into the cap's range; see [thermalBitrateCap]. */
+    internal fun clampThermalCap(fraction: Double): Double = when {
+      fraction.isNaN() || fraction >= 1.0 -> 1.0
+      else -> fraction.coerceAtLeast(MIN_THERMAL_CAP)
+    }
+
+    private const val MIN_THERMAL_CAP = 0.25
 
     /** The preview currently mounted, if any. See the note on the class. */
     var current: BroadcasterView? = null

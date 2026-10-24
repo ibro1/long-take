@@ -61,6 +61,13 @@ internal fun BroadcasterView.startRecording(): String {
   }
 
   recordingWanted = true
+  /**
+   * An off-air take starts the encoder with whatever bitrate it was prepared
+   * at, and the thermal cap may have moved since - `ensurePrepared` does not
+   * prepare again for that. Handed over now that the encoder is running; a
+   * running stream already has it from the connection.
+   */
+  if (!stream.isStreaming) runCatching { stream.setVideoBitrateOnFly(bitrateCeiling()) }
   log(LOG_INFO, "Recording to ${file.name}")
   watchForSplit()
   /**

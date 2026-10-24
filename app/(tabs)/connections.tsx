@@ -64,7 +64,7 @@ import {
   claimPairingCode,
   studioUrlFrom,
 } from "@/lib/broadcast/pairing";
-import { loadSettings } from "@/lib/broadcast/settings";
+import { defaultPicture, loadSettings } from "@/lib/broadcast/settings";
 import { formatKbps } from "@/lib/broadcast/units";
 import { bidi } from "@/lib/i18n";
 
@@ -583,6 +583,9 @@ export default function ConnectionsScreen() {
 }
 
 function blankConnection(): Connection {
+  // A new card starts at the picture chosen under Settings > Video; a saved
+  // one keeps whatever it was saved with.
+  const picture = defaultPicture();
   return {
     id: `conn_${Date.now().toString(36)}`,
     name: "",
@@ -591,9 +594,9 @@ function blankConnection(): Connection {
     protocol: "rtmp",
     srtLatencyMs: DEFAULT_SETTINGS.srtLatencyMs,
     passphrase: "",
-    width: DEFAULT_SETTINGS.width,
-    height: DEFAULT_SETTINGS.height,
-    fps: DEFAULT_SETTINGS.fps,
+    width: picture.width,
+    height: picture.height,
+    fps: picture.fps,
     videoBitrate: DEFAULT_SETTINGS.videoBitrate,
     createdAt: Date.now(),
   };

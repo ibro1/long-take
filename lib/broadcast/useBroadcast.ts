@@ -8,6 +8,7 @@ import type {
   AudioDevicesEvent,
   AudioInterruptedEvent,
   BitrateEvent,
+  ExposureStateEvent,
   StatsEvent,
   BroadcastState,
   CameraCapabilities,
@@ -793,7 +794,56 @@ export function useBroadcast() {
 
   const setWhiteBalance = useCallback(async (mode: number) => {
     setWhiteBalanceState(mode);
+    // A preset ends kelvin mode on the native side; say so here too.
+    setKelvin(null);
     await Broadcaster.setWhiteBalance(mode).catch(() => {});
+  }, []);
+
+  /**
+   * White balance by temperature and tint, Filmic's colour panel. Null kelvin
+   * means a preset (or auto) is in charge.
+   */
+  const [kelvin, setKelvin] = useState<number | null>(null);
+  const [tint, setTint] = useState(0);
+  const setWhiteBalanceKelvin = useCallback(async (nextKelvin: number, nextTint: number) => {
+    setKelvin(nextKelvin);
+    setTint(nextTint);
+    await Broadcaster.setWhiteBalanceKelvin(nextKelvin, nextTint).catch(() => {});
+  }, []);
+
+  /**
+   * Manual exposure: ISO and shutter set by hand, auto-exposure off. While
+   * manual, compensation, the spot meter and the AE lock have nothing to act
+   * on - the screen stands them down; the native side keeps them stored for
+   * the return to auto.
+   */
+  const [exposureMode, setExposureModeState] = useState<"auto" | "manual">("auto");
+  const [manualIso, setManualIso] = useState(400);
+  const [manualExposureNs, setManualExposureNs] = useState(Math.round(1e9 / 60));
+  const setManualExposure = useCallback(async (iso: number, exposureNs: number) => {
+    setExposureModeState("manual");
+    setManualIso(iso);
+    setManualExposureNs(exposureNs);
+    await Broadcaster.setManualExposure(iso, exposureNs).catch(() => {});
+  }, []);
+  const setExposureMode = useCallback(
+    async (mode: "auto" | "manual") => {
+      if (mode === "auto") {
+        setExposureModeState("auto");
+        await Broadcaster.resumeAutoExposure().catch(() => {});
+        return;
+      }
+      // Start manual from what the sensor is doing now, so the picture does
+      // not jump the moment the operator takes over.
+      const { iso, exposureNs } = readReadouts();
+      await setManualExposure(iso ?? manualIso, exposureNs ?? manualExposureNs);
+    },
+    [manualIso, manualExposureNs, setManualExposure],
+  );
+
+  /** The sensor's actual ISO and shutter, into the store for the readout strip. */
+  const onExposureState = useCallback((event: { nativeEvent: ExposureStateEvent }) => {
+    setReadouts({ iso: event.nativeEvent.iso, exposureNs: event.nativeEvent.exposureNs });
   }, []);
 
   /**
@@ -1625,6 +1675,15 @@ export function useBroadcast() {
     setFocusDistance,
     resumeAutoFocus,
     whiteBalance,
+    kelvin,
+    tint,
+    setWhiteBalanceKelvin,
+    exposureMode,
+    setExposureMode,
+    manualIso,
+    manualExposureNs,
+    setManualExposure,
+    onExposureState,
     setWhiteBalance,
     noiseReduction,
     setNoiseReduction,
@@ -1650,6 +1709,7 @@ export function useBroadcast() {
     restoreMicrophone,
     takePhoto,
     notice,
+    notify,
 
     onLog,
   };

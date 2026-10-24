@@ -71,6 +71,12 @@ export function ReadoutStrip({
   onPress: () => void;
 }) {
   const bitrate = useReadout((r) => r.bitrate);
+  // The sensor's own ISO and shutter, as Filmic leads its strip with. Absent
+  // until the camera reports them (an older build, or auto on a phone whose
+  // capture results are not exposed), and then simply not shown.
+  const iso = useReadout((r) => r.iso);
+  const exposureNs = useReadout((r) => r.exposureNs);
+  const shutterText = exposureNs ? shutterLabel(exposureNs) : null;
 
   const zoomText = `${zoom.toFixed(1)}×`;
   const [evValue, evUnit] = splitUnit(formatEv(exposure * evStep));
@@ -88,6 +94,8 @@ export function ReadoutStrip({
   if (exposureLocked) evParts.push({ text: "AE·L", bold: true, color: filmic.color.accent });
 
   const label = [
+    ...(iso != null ? [`ISO ${Math.round(iso)}`] : []),
+    ...(shutterText ? [`Shutter ${shutterText}`] : []),
     `Zoom ${zoomText}`,
     `${formatEv(exposure * evStep)}${exposureLocked ? ", exposure locked" : ""}`,
     `White balance ${whiteBalance}`,
@@ -105,6 +113,8 @@ export function ReadoutStrip({
       className="active:opacity-60"
       style={styles.strip}
     >
+      {iso != null ? <Item parts={[{ text: "ISO " }, { text: String(Math.round(iso)), bold: true }]} /> : null}
+      {shutterText ? <Item parts={[{ text: shutterText, bold: true }]} /> : null}
       <Item parts={[{ text: zoomText, bold: true }]} />
       <Item parts={evParts} />
       <Item parts={[{ text: whiteBalance, bold: true }]} />
@@ -141,3 +151,10 @@ const styles = StyleSheet.create({
   light: { fontWeight: "300" },
   bold: { fontWeight: "700" },
 });
+
+/** A shutter time as photographers say it: "1/60", or "1/2s"-style for long ones. */
+function shutterLabel(ns: number): string {
+  const seconds = ns / 1e9;
+  if (seconds >= 0.3) return `${seconds.toFixed(1)}s`;
+  return `1/${Math.round(1 / seconds)}`;
+}

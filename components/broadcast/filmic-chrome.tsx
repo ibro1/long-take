@@ -282,6 +282,7 @@ export function InfoPanel({
   battery,
   warn,
   onPress,
+  onLongPress,
 }: {
   fps: number | null;
   resolution: string | null;
@@ -291,6 +292,8 @@ export function InfoPanel({
   battery: { level: number; charging: boolean };
   warn?: boolean;
   onPress?: () => void;
+  /** Holding the panel answers "how long will the battery last". */
+  onLongPress?: () => void;
 }) {
   const percent = Math.round(Math.max(0, Math.min(1, battery.level)) * 100);
   const summary = [
@@ -303,7 +306,8 @@ export function InfoPanel({
   return (
     <Pressable
       onPress={onPress}
-      disabled={!onPress}
+      onLongPress={onLongPress}
+      disabled={!onPress && !onLongPress}
       accessibilityRole="button"
       accessibilityLabel={summary}
       className="active:opacity-60"

@@ -46,6 +46,7 @@ export function useSpotMeter({
   min,
   max,
   onExposure,
+  intervalMs = FAST_MS,
 }: {
   /** Written by the reticle as it moves; read here, never rendered from. */
   pointRef: MutableRefObject<SpotPoint | null>;
@@ -56,6 +57,8 @@ export function useSpotMeter({
   min: number;
   max: number;
   onExposure: (next: number) => void;
+  /** How often a correction is judged; the heat ladder raises it to a second. */
+  intervalMs?: number;
 }) {
   const exposureRef = useRef(exposure);
   exposureRef.current = exposure;
@@ -92,10 +95,10 @@ export function useSpotMeter({
         .finally(() => {
           busy = false;
         });
-    }, FAST_MS);
+    }, intervalMs);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [enabled, min, max, pointRef]);
+  }, [enabled, min, max, pointRef, intervalMs]);
 }

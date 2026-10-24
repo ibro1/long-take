@@ -63,6 +63,9 @@ class UnknownAudioDeviceException :
  */
 private val SUPPORTED_SCHEMES = listOf("rtmp", "rtmps", "rtmpt", "rtmpts", "rtsp", "rtsps", "srt", "udp")
 
+/** The dimmest `setScreenBrightness` goes; see the note on it. */
+private const val MIN_SCREEN_BRIGHTNESS = 0.05
+
 /**
  * The JS-facing surface of the broadcaster.
  *
@@ -125,6 +128,7 @@ class BroadcasterModule : Module() {
         "onAudioInterrupted",
         "onThermal",
         "onStats",
+        "onExposureState",
       )
     }
 
@@ -153,6 +157,15 @@ class BroadcasterModule : Module() {
       // Nullable so that a prop JavaScript stops passing reads as unmuted
       // rather than failing the conversion.
       Prop("muted") { view: LevelMeterView, muted: Boolean? -> view.muted = muted ?: false }
+      /**
+       * The most frames a second the meter redraws at; 30 when absent. The
+       * thermal ladder lowers it to 5 on a hot phone, where a meter that
+       * moves five times a second still says the microphone is alive and
+       * costs a sixth of the wakeups. Nullable for the same reason as `muted`.
+       */
+      Prop("maxFps") { view: LevelMeterView, maxFps: Double? ->
+        view.maxFps = maxFps ?: LevelMeterView.DEFAULT_MAX_FPS
+      }
     }
 
     /**
@@ -366,9 +379,58 @@ class BroadcasterModule : Module() {
      * without interrupting what viewers are watching.
      */
     AsyncFunction("setVideoBitrate") { bitrate: Int ->
-      val v = view()
-      v.videoBitrate = bitrate
-      if (v.stream.isStreaming) v.stream.setVideoBitrateOnFly(bitrate)
+      // Under the thermal cap, if one is set; see [BroadcasterView.bitrateCeiling].
+      view().changeVideoBitrate(bitrate)
+    }
+
+    /**
+     * The thermal ladder's bitrate cap: 0.25 to 1 of the configured bitrate,
+     * 1 meaning no cap. Applied to a live encoder at once and to every later
+     * one, and held against the adaptive climb, which would otherwise undo it
+     * the first time the uplink cleared.
+     *
+     * Synchronous and view-less: the cap is kept on the view's companion, so
+     * it can be set before a preview exists and survives the preview being
+     * rebuilt by a tab change.
+     */
+    Function("setThermalBitrateCap") { fraction: Double ->
+      BroadcasterView.thermalBitrateCap = BroadcasterView.clampThermalCap(fraction)
+      BroadcasterView.current?.applyBitrateCap()
+      Unit
+    }
+
+    /**
+     * The window's own brightness, 0.05 to 1, or -1 (any negative) to give it
+     * back to the system.
+     *
+     * Here rather than in a split-out file because it needs the module's own
+     * `appContext` to reach the Activity, like the folder picker. Per window,
+     * not the system setting: nothing outside this app is changed, it needs no
+     * permission, and Android drops it by itself when the app leaves the
+     * screen - so a dimmed viewfinder can never leave the operator's phone dim
+     * after the broadcast.
+     *
+     * Floored at 0.05 because zero is a black screen on most panels, and a
+     * screen the operator cannot read is not a power saving, it is a lost
+     * broadcast. On the UI thread, because window attributes may only be
+     * changed from the thread that owns the window.
+     */
+    Function("setScreenBrightness") { fraction: Double ->
+      val activity = appContext.currentActivity ?: return@Function Unit
+      val value = if (fraction.isNaN() || fraction < 0.0) {
+        android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+      } else {
+        fraction.coerceIn(MIN_SCREEN_BRIGHTNESS, 1.0).toFloat()
+      }
+      activity.runOnUiThread {
+        runCatching {
+          val window = activity.window
+          val attributes = window.attributes
+          attributes.screenBrightness = value
+          window.attributes = attributes
+        }
+      }
+      Unit
     }
 
     /**

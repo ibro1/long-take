@@ -1,0 +1,181 @@
+import {
+  Cpu,
+  Hand,
+  Info,
+  Layers,
+  type LucideIcon,
+  Mic,
+  RadioTower,
+  SlidersHorizontal,
+  Smartphone,
+  Video,
+} from "lucide-react-native";
+import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+
+import { paper } from "@/components/settings/chrome";
+import { Text } from "@/components/ui/text";
+
+/**
+ * Settings as Filmic lays them out: nine words on a light panel, three by
+ * three, each under a line icon.
+ *
+ * A list asks the operator to read; a grid of nine asks them to recognise, and
+ * the second is what a hand does in the minute before going live. The grid is
+ * drawn twice - over the viewfinder as an overlay, and full screen as the
+ * Settings tab - so the tiles, their order and where they go are decided here
+ * once.
+ *
+ * Plain English, like the settings pages behind it: those are not translated
+ * yet, and a translated door into an English room is a promise broken one tap
+ * later.
+ */
+
+export type SettingsTile =
+  | "video"
+  | "audio"
+  | "hardware"
+  | "device"
+  | "presets"
+  | "stabilization"
+  | "streaming"
+  | "interface"
+  | "information";
+
+export const SETTINGS_TILES: { id: SettingsTile; label: string; icon: LucideIcon }[] = [
+  { id: "video", label: "Video", icon: Video },
+  { id: "audio", label: "Audio", icon: Mic },
+  { id: "hardware", label: "Hardware", icon: Cpu },
+  { id: "device", label: "Device", icon: Smartphone },
+  { id: "presets", label: "Presets", icon: Layers },
+  { id: "stabilization", label: "Stabilization", icon: Hand },
+  { id: "streaming", label: "Streaming", icon: RadioTower },
+  { id: "interface", label: "Interface", icon: SlidersHorizontal },
+  { id: "information", label: "Information", icon: Info },
+];
+
+const ROUTES: Record<SettingsTile, string | null> = {
+  video: "/settings/video",
+  audio: "/settings/audio",
+  device: "/settings/device",
+  presets: "/settings/presets",
+  streaming: "/settings/streaming",
+  interface: "/settings/interface",
+  information: "/settings/information",
+  // Lens, focus, exposure and stabilisation are set where the picture is, on
+  // the viewfinder's Camera panel. The overlay can open that directly; the
+  // full-screen grid sends these to /settings/hardware, which says so.
+  hardware: null,
+  stabilization: null,
+};
+
+/**
+ * Where a tile goes, or null for the two that live on the viewfinder's Camera
+ * panel rather than on a settings page.
+ */
+export function routeForTile(tile: SettingsTile): string | null {
+  return ROUTES[tile];
+}
+
+/**
+ * The nine tiles on their panel, with the hairlines between them.
+ *
+ * The lines are each tile's right and bottom border, dropped on the last
+ * column and the last row, so the grid has lines inside and none round the
+ * edge - the panel's own rounded edge is the frame.
+ */
+export function SettingsTiles({
+  onTile,
+  tileHeight,
+}: {
+  onTile: (tile: SettingsTile) => void;
+  /** Square-ish: the overlay passes its column width, the full screen less. */
+  tileHeight: number;
+}) {
+  return (
+    <View
+      className="flex-row flex-wrap overflow-hidden rounded-2xl"
+      style={{ backgroundColor: paper.page }}
+    >
+      {SETTINGS_TILES.map((tile, index) => {
+        const Icon = tile.icon;
+        const lastColumn = index % 3 === 2;
+        const lastRow = index >= 6;
+        return (
+          <Pressable
+            key={tile.id}
+            accessibilityRole="button"
+            accessibilityLabel={tile.label}
+            accessibilityHint={`Opens ${tile.label} settings`}
+            onPress={() => onTile(tile.id)}
+            className="items-center justify-center gap-2 active:opacity-60"
+            style={{
+              width: "33.3333%",
+              height: tileHeight,
+              borderColor: paper.line,
+              borderRightWidth: lastColumn ? 0 : StyleSheet.hairlineWidth,
+              borderBottomWidth: lastRow ? 0 : StyleSheet.hairlineWidth,
+            }}
+          >
+            <Icon size={36} color={paper.ink} strokeWidth={1.5} />
+            <Text numberOfLines={1} style={{ color: paper.ink, fontSize: 15, lineHeight: 20 }}>
+              {tile.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * The grid as an overlay on whatever is under it, which in practice is the
+ * live picture: dimmed, not hidden, so the operator still sees the room.
+ *
+ * Absolute fill rather than a React Native Modal, because a Modal is a new
+ * window and Android's immersive flags do not carry into it - the status and
+ * navigation bars would come back over the picture every time it opened.
+ */
+export function SettingsGrid({
+  open,
+  onClose,
+  onTile,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onTile: (tile: SettingsTile) => void;
+}) {
+  const { width, height } = useWindowDimensions();
+  if (!open) return null;
+
+  const landscape = width > height;
+  const panelWidth = landscape ? Math.min(width * 0.48, 560) : width - 24;
+  // Square tiles where the screen allows, squeezed to fit a short landscape
+  // screen with a margin, never shorter than a thumb.
+  const tileHeight = Math.max(72, Math.min(panelWidth / 3, (height - 48) / 3));
+
+  return (
+    <View className="absolute inset-0 items-center justify-center" style={{ zIndex: 50 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close settings"
+        onPress={onClose}
+        className="absolute inset-0"
+        style={{ backgroundColor: "rgba(0,0,0,0.45)" }}
+      />
+      <View
+        accessibilityViewIsModal
+        style={{
+          width: panelWidth,
+          shadowColor: "#000",
+          shadowOpacity: 0.3,
+          shadowRadius: 16,
+          shadowOffset: { width: 0, height: 6 },
+          elevation: 12,
+          borderRadius: 16,
+        }}
+      >
+        <SettingsTiles onTile={onTile} tileHeight={tileHeight} />
+      </View>
+    </View>
+  );
+}

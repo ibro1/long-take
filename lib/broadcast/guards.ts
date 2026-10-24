@@ -137,6 +137,9 @@ export function guardFor(conditions: Conditions): Guard | null {
    */
   const encoding = recording || conditions.live;
 
+  // The thermal texts say what the ladder (thermal-ladder.ts) has done about
+  // the heat, not what the operator should do: severe caps the bitrate,
+  // critical strips the viewfinder down.
   if (encoding && thermal >= THERMAL_BAD) {
     return {
       id: "thermal",

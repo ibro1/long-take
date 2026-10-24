@@ -1,7 +1,7 @@
 import { useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import { useFocusEffect } from "@react-navigation/native";
 import { useKeepAwake } from "expo-keep-awake";
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -10,6 +10,7 @@ import {
   PermissionsAndroid,
   Platform,
   Pressable,
+  TextInput,
   useWindowDimensions,
   Vibration,
   View,
@@ -25,6 +26,7 @@ import {
   loadSettings,
   recordQualityFor,
   savePreferences,
+  saveSettings,
   QUICK_CONTROLS,
   type QuickControl,
 } from "@/lib/broadcast/settings";
@@ -42,6 +44,12 @@ import {
   type BroadcastState,
 } from "@/components/broadcast/filmic-chrome";
 import { type SpotPoint, useSpotMeter } from "@/lib/broadcast/useSpotMeter";
+import { ladderEffects, useThermalLadder } from "@/lib/broadcast/thermal-ladder";
+import { useIdleDim } from "@/lib/broadcast/idle-dim";
+import { DrainEstimator } from "@/lib/broadcast/battery-estimate";
+import { listPresets, type Preset, savePreset, subscribePresets } from "@/lib/broadcast/presets";
+import { ImagePanel } from "@/components/broadcast/image-panel";
+import { routeForTile, SettingsGrid } from "@/components/settings/settings-grid";
 import { useReadout } from "@/lib/broadcast/readouts";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
@@ -76,6 +84,7 @@ import {
   PhotoIcon,
   RecordIcon,
   ResumeIcon,
+  PresetIcon,
   SettingsIcon,
   ShapeIcon,
   StatsIcon,
@@ -97,7 +106,7 @@ import { TouchLayer } from "@/components/broadcast/touch-layer";
 import { UpdateCard, useHostUpdatePrompt } from "@/components/updates/update-prompt";
 import { Button } from "@/components/ui/button";
 import { Text } from "@/components/ui/text";
-import { activeConnection, type Connection } from "@/lib/broadcast/connections";
+import { activeConnection, type Connection, saveConnection } from "@/lib/broadcast/connections";
 import { pushLog } from "@/lib/broadcast/log";
 import { endBroadcast } from "@/lib/broadcast/overlays";
 import { isSettled } from "@/lib/broadcast/studio-status";
@@ -114,6 +123,9 @@ import {
   type MonitorMode,
   type Orientation,
   setMonitor,
+  setMonitorOptions,
+  setScreenBrightness,
+  setThermalBitrateCap,
 } from "@/modules/framevane-broadcaster";
 
 /** Named apart from the Panel component: one is a box, this is which box. */
@@ -188,7 +200,17 @@ async function askForBroadcastNotification(): Promise<void> {
 const LOW_BATTERY = 0.4;
 const CRITICAL_BATTERY = 0.15;
 
-type PanelId = "camera" | "shape" | "overlays" | "stats" | "log" | "mic" | "preflight" | null;
+type PanelId =
+  | "camera"
+  | "image"
+  | "presets"
+  | "shape"
+  | "overlays"
+  | "stats"
+  | "log"
+  | "mic"
+  | "preflight"
+  | null;
 
 /**
  * How wide the landscape control column is. Fixed rather than proportional,
@@ -247,9 +269,13 @@ export default function BroadcastScreen() {
    * show until the app was restarted.
    */
   const [glass, setGlass] = useState<QuickControl[]>(() => loadPreferences().quickAccess);
+  /** The viewfinder's own preferences (Device and Interface pages). */
+  const [viewPrefs, setViewPrefs] = useState(() => viewPrefsOf(loadPreferences()));
   useFocusEffect(
     useCallback(() => {
-      setGlass(loadPreferences().quickAccess);
+      const prefs = loadPreferences();
+      setGlass(prefs.quickAccess);
+      setViewPrefs(viewPrefsOf(prefs));
     }, []),
   );
   const [panel, setPanel] = useState<PanelId>(null);
@@ -303,6 +329,15 @@ export default function BroadcastScreen() {
     resumeAutoFocus,
     whiteBalance,
     setWhiteBalance,
+    kelvin,
+    tint,
+    setWhiteBalanceKelvin,
+    exposureMode,
+    setExposureMode,
+    manualIso,
+    manualExposureNs,
+    setManualExposure,
+    onExposureState,
     noiseReduction,
     setNoiseReduction,
     antiFlicker,
@@ -326,6 +361,7 @@ export default function BroadcastScreen() {
     restoreMicrophone,
     takePhoto,
     notice,
+    notify,
     onLog,
   } = useBroadcast();
 
@@ -791,8 +827,65 @@ export default function BroadcastScreen() {
     if (live && monitor !== "off") setMonitorMode("off");
   }, [live, monitor]);
 
+  /**
+   * The heat ladder: as Android's thermal status climbs, shed the viewfinder's
+   * own load before the phone throttles everything - aids off and slower meters
+   * at moderate, a bitrate cap and a quieter, dimmer screen at severe, a bare
+   * viewfinder at critical. It comes back down one step a minute. See
+   * lib/broadcast/thermal-ladder.ts; Device settings can switch it off.
+   */
+  const ladderStep = useThermalLadder(thermal, viewPrefs.thermalLadder);
+  const ladder = useMemo(() => ladderEffects(ladderStep), [ladderStep]);
+  useEffect(() => {
+    if (ladder.aidsOff && monitor !== "off") applyMonitor("off");
+  }, [ladder.aidsOff, monitor, applyMonitor]);
+  useEffect(() => {
+    setThermalBitrateCap(ladder.bitrateCap);
+  }, [ladder.bitrateCap]);
+
+  // Peaking colour and zebra threshold from Interface settings.
+  useEffect(() => {
+    setMonitorOptions({
+      peakingColor: viewPrefs.peakingColor,
+      zebraThreshold: viewPrefs.zebraThreshold,
+    });
+  }, [viewPrefs.peakingColor, viewPrefs.zebraThreshold]);
+
+  /**
+   * Dim after 30 s untouched - the operator's choice for a tripod class, or the
+   * ladder's at severe heat. The screen is the second-biggest heat source after
+   * the chip, and on a tripod nobody is looking at it most of the hour.
+   */
+  const { touched } = useIdleDim({
+    enabled: viewPrefs.dimWhenIdle || ladder.dimIdle,
+    dimAfterMs: 30_000,
+    onDim: () => setScreenBrightness(ladder.dimIdle ? 0.6 : 0.35),
+    onWake: () => setScreenBrightness(-1),
+  });
+
+  /** Minutes of battery left at the recent rate of drain, said when the info panel is held. */
+  const drain = useRef(new DrainEstimator());
+  useEffect(() => {
+    drain.current.sample(charge.level, charge.charging, Date.now());
+  }, [charge.level, charge.charging]);
+  const sayBattery = useCallback(() => {
+    const minutes = drain.current.minutesLeft();
+    notify(
+      charge.charging
+        ? "Charging"
+        : minutes === null
+          ? "Measuring the battery - ask again in a couple of minutes"
+          : t("guard.minutesOfBattery", { minutes }),
+    );
+  }, [charge.charging, notify]);
+
   /** Analytics (peaking / zebra / false colour) live behind one button, as in Filmic. */
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  /** Filmic's settings grid, opened over the viewfinder from the gear. */
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [presets, setPresets] = useState<Preset[]>(() => listPresets());
+  useEffect(() => subscribePresets(() => setPresets(listPresets())), []);
+  const [presetName, setPresetName] = useState("");
 
   /**
    * Where the exposure reticle sits, in fractions of the camera view. The spot
@@ -813,11 +906,13 @@ export default function BroadcastScreen() {
       exposureRange.max > exposureRange.min &&
       !exposureLocked &&
       monitor === "off" &&
-      panel === null,
+      panel === null &&
+      exposureMode === "auto",
     exposure,
     min: exposureRange.min,
     max: exposureRange.max,
     onExposure: setExposure,
+    intervalMs: ladder.spotMeterIntervalMs,
   });
 
   /**
@@ -1145,6 +1240,12 @@ export default function BroadcastScreen() {
   /** The rest, as rows with room for a label and a line of explanation. */
   const moreItems: MoreItem[] = [
     {
+      icon: PresetIcon,
+      label: "Presets",
+      hint: presets.length > 0 ? `${presets.length} saved` : "Save this camera setup",
+      onPress: () => setPanel("presets"),
+    },
+    {
       icon: GlobeIcon,
       label: t("control.destinations"),
       hint: connection?.name ?? t("control.nowhere"),
@@ -1216,8 +1317,126 @@ export default function BroadcastScreen() {
   const troubled = live && (congested || dropped > 0);
   const infoWarn = troubled || (charge.level <= CRITICAL_BATTERY && !charge.charging);
 
+  /** What the camera is set to now, as a preset would keep it. */
+  const presetSnapshot = (name: string): Omit<Preset, "id" | "createdAt"> => ({
+    name,
+    video: {
+      width: connection?.width ?? 1280,
+      height: connection?.height ?? 720,
+      fps: connection?.fps ?? 30,
+      codec: videoCodec,
+    },
+    exposure:
+      exposureMode === "manual"
+        ? { mode: "manual", iso: manualIso, exposureNs: manualExposureNs }
+        : { mode: "auto", ev: exposure },
+    whiteBalance:
+      kelvin !== null ? { mode: "kelvin", kelvin, tint } : { mode: "preset", awb: whiteBalance },
+  });
+
+  /**
+   * Apply a preset. The camera half lands at once; the picture size and frame
+   * rate belong to the destination and only change off air, because a stream
+   * cannot change shape mid-broadcast.
+   */
+  const applyPreset = (preset: Preset) => {
+    if (preset.exposure.mode === "manual") {
+      void setManualExposure(preset.exposure.iso, preset.exposure.exposureNs);
+    } else {
+      void setExposureMode("auto");
+      void setExposure(preset.exposure.ev);
+    }
+    if (preset.whiteBalance.mode === "kelvin") {
+      void setWhiteBalanceKelvin(preset.whiteBalance.kelvin, preset.whiteBalance.tint);
+    } else {
+      void setWhiteBalance(preset.whiteBalance.awb);
+    }
+    if (!live && connection) {
+      const next = {
+        ...connection,
+        width: preset.video.width,
+        height: preset.video.height,
+        fps: preset.video.fps,
+      };
+      saveConnection(next);
+      setConnection(next);
+      saveSettings({ videoCodec: preset.video.codec as typeof videoCodec });
+    }
+    notify(live ? `${preset.name}: camera applied (picture size waits until off air)` : `${preset.name} applied`);
+  };
+
   const panelBody =
-    panel === null ? null : panel === "log" ? (
+    panel === null ? null : panel === "image" ? (
+      <ImagePanel
+        onClose={closePanel}
+        whiteBalanceModes={whiteBalanceModes}
+        whiteBalance={kelvin !== null ? -1 : whiteBalance}
+        describeWhiteBalance={describeWhiteBalance}
+        onWhiteBalance={setWhiteBalance}
+        manualWhiteBalance={capabilities?.manualWhiteBalance ?? false}
+        kelvin={kelvin}
+        tint={tint}
+        onKelvin={setWhiteBalanceKelvin}
+        manualSensor={capabilities?.manualSensor ?? false}
+        exposureMode={exposureMode}
+        onExposureMode={setExposureMode}
+        isoRange={capabilities?.isoRange ?? null}
+        exposureTimeRange={capabilities?.exposureTimeRange ?? null}
+        iso={manualIso}
+        exposureNs={manualExposureNs}
+        onManualExposure={setManualExposure}
+        fps={connection?.fps ?? 30}
+      />
+    ) : panel === "presets" ? (
+      <Panel title="Presets" onClose={closePanel}>
+        {presets.length === 0 ? (
+          <Text className="text-sm text-filmic-inkmuted">
+            Nothing saved yet. Set the camera up, name it below, and save.
+          </Text>
+        ) : (
+          presets.map((preset) => (
+            <Row
+              key={preset.id}
+              label={preset.name}
+              hint={`${preset.video.height}p ${preset.video.fps} · ${
+                preset.exposure.mode === "manual" ? `ISO ${preset.exposure.iso}` : "auto exposure"
+              } · ${preset.whiteBalance.mode === "kelvin" ? `${preset.whiteBalance.kelvin}K` : "WB preset"}`}
+              selected={false}
+              onPress={() => applyPreset(preset)}
+            />
+          ))
+        )}
+        <View className="flex-row items-center gap-2 pt-2">
+          <TextInput
+            value={presetName}
+            onChangeText={setPresetName}
+            placeholder="Name, e.g. Masjid class"
+            placeholderTextColor="#9BA0AC"
+            className="min-h-11 flex-1 rounded-xl bg-filmic-elevated px-3 text-sm text-filmic-ink"
+          />
+          <Pressable
+            accessibilityRole="button"
+            disabled={presetName.trim().length === 0}
+            onPress={() => {
+              savePreset(presetSnapshot(presetName.trim()));
+              setPresetName("");
+              notify("Preset saved");
+            }}
+            className={`min-h-11 justify-center rounded-xl px-4 active:opacity-60 ${
+              presetName.trim().length === 0 ? "bg-filmic-elevated" : "bg-filmic-accent"
+            }`}
+          >
+            <Text
+              className={`text-sm font-semibold ${
+                presetName.trim().length === 0 ? "text-filmic-inkmuted" : "text-filmic-accentink"
+              }`}
+            >
+              Save current
+            </Text>
+          </Pressable>
+        </View>
+      </Panel>
+    ) : panel === "log" ? (
       <LiveLogPanel onClose={closePanel} />
     ) : panel === "camera" ? (
       <Panel title="Camera" onClose={closePanel}>
@@ -1613,7 +1832,7 @@ export default function BroadcastScreen() {
   );
 
   /** Filmic's line of numbers along the top of the picture; tapping it opens the drawer. */
-  const readoutStrip = (
+  const readoutStrip = !viewPrefs.readoutStrip || ladder.minimal ? null : (
     <ReadoutStrip
       zoom={zoom}
       exposure={exposure}
@@ -1663,12 +1882,13 @@ export default function BroadcastScreen() {
   );
 
   return (
-    <View className="flex-1 bg-black">
+    <View className="flex-1 bg-black" onTouchStart={touched}>
       <BroadcasterView
         style={FILL}
         onStatus={onStatus}
         onBitrate={onBitrate}
         onStats={onStats}
+        onExposureState={onExposureState}
         onLevel={onLevel}
         onCameras={onCameras}
         onAudioDevices={onAudioDevices}
@@ -1701,7 +1921,7 @@ export default function BroadcastScreen() {
         <View pointerEvents="box-none" className="absolute inset-0">
           <Reticles
             canFocus={capabilities?.available ?? false}
-            canExpose={canExpose}
+            canExpose={canExpose && exposureMode === "auto"}
             insets={reticleInsets}
             exposureLocked={exposureLocked}
             onFocus={focusAt}
@@ -1711,7 +1931,9 @@ export default function BroadcastScreen() {
         </View>
       ) : null}
 
-      {panel === null ? <FramingGuides guides={guides} insets={reticleInsets} /> : null}
+      {panel === null && !ladder.minimal ? (
+        <FramingGuides guides={guides} insets={reticleInsets} />
+      ) : null}
 
       {/* One full-frame state at a time, most urgent first: a reconnect is
           news even while paused, and a broadcast that has gone off air is no
@@ -1910,7 +2132,7 @@ export default function BroadcastScreen() {
         className="absolute inset-y-0 left-3 flex-row items-center justify-center gap-2"
       >
         <View pointerEvents="none" className="items-start">
-          <Meter muted={muted} />
+          <Meter muted={muted} maxFps={ladder.levelMeterFps} />
         </View>
 
 
@@ -1921,7 +2143,7 @@ export default function BroadcastScreen() {
           from its button, as Filmic keeps them: there when wanted, not parked
           over the shot. Cleared and disabled on air - a focusing help, not
           something that goes out. */}
-      {analyticsOpen && panel === null ? (
+      {analyticsOpen && panel === null && !ladder.aidsOff ? (
         <View
           pointerEvents="box-none"
           style={
@@ -1985,7 +2207,7 @@ export default function BroadcastScreen() {
           className="absolute"
           style={{ bottom: 86, left: lead, width: width - trail - lead }}
         >
-          <Notice text={notice.text} at={notice.at} tone={notice.tone} />
+          {ladder.quietHud ? null : <Notice text={notice.text} at={notice.at} tone={notice.tone} />}
         </View>
       ) : null}
 
@@ -2020,9 +2242,9 @@ export default function BroadcastScreen() {
                 <StatusBadge state={badgeState} label={badgeLabel} />
               </View>
               <ColorDiamond
-                label={CONTROL.camera.label}
-                active={panel === "camera"}
-                onPress={() => togglePanel("camera")}
+                label="Image"
+                active={panel === "image"}
+                onPress={() => togglePanel("image")}
               />
             </View>
           </SafeAreaView>
@@ -2043,7 +2265,7 @@ export default function BroadcastScreen() {
               {micControl}
 
               <View pointerEvents="none" className="flex-1 items-center justify-center py-2">
-                <Meter muted={muted} />
+                <Meter muted={muted} maxFps={ladder.levelMeterFps} />
               </View>
 
               <ShutterButton label={primary.label} mode={primary.mode} onPress={primary.onPress} />
@@ -2066,7 +2288,7 @@ export default function BroadcastScreen() {
                     <GlassDisc
                       icon={SettingsIcon}
                       label={t("control.settings")}
-                      onPress={() => router.push("/(tabs)/settings")}
+                      onPress={() => setSettingsOpen(true)}
                     />
                     {live ? <LiveStudioChip /> : null}
                     {recording ? (
@@ -2124,7 +2346,7 @@ export default function BroadcastScreen() {
                       onPress={toggleTorch}
                     />
                   ) : null}
-                  {leftCornerIds.map(cornerDisc)}
+                  {ladder.minimal ? null : leftCornerIds.map(cornerDisc)}
                 </View>
 
                 <View
@@ -2141,6 +2363,7 @@ export default function BroadcastScreen() {
                     battery={{ level: charge.level, charging: charge.charging }}
                     warn={infoWarn}
                     onPress={() => togglePanel("stats")}
+                    onLongPress={sayBattery}
                   />
                 </View>
 
@@ -2148,7 +2371,12 @@ export default function BroadcastScreen() {
                   pointerEvents="box-none"
                   className="absolute bottom-3 right-3 flex-row items-end gap-2.5"
                 >
-                  {rightCornerIds.map(cornerDisc)}
+                  <GlassDisc
+                    icon={ResumeIcon}
+                    label="Recordings"
+                    onPress={() => router.push("/settings/recordings")}
+                  />
+                  {ladder.minimal ? null : rightCornerIds.map(cornerDisc)}
                 </View>
               </View>
             </SafeAreaView>
@@ -2190,7 +2418,7 @@ export default function BroadcastScreen() {
                 icon={SettingsIcon}
                 size={40}
                 label={t("control.settings")}
-                onPress={() => router.push("/(tabs)/settings")}
+                onPress={() => setSettingsOpen(true)}
               />
             </View>
           </SafeAreaView>
@@ -2227,7 +2455,7 @@ export default function BroadcastScreen() {
                 {panelBody}
               </View>
             ) : null}
-            <Notice text={notice.text} at={notice.at} tone={notice.tone} />
+            {ladder.quietHud ? null : <Notice text={notice.text} at={notice.at} tone={notice.tone} />}
             {panel === null ? (
               <View pointerEvents="box-none" className="items-center">
                 <LiveInfoPanel
@@ -2240,6 +2468,7 @@ export default function BroadcastScreen() {
                   battery={{ level: charge.level, charging: charge.charging }}
                   warn={infoWarn}
                   onPress={() => togglePanel("stats")}
+                  onLongPress={sayBattery}
                 />
               </View>
             ) : null}
@@ -2264,14 +2493,20 @@ export default function BroadcastScreen() {
                     onPress={toggleTorch}
                   />
                 ) : null}
-                {leftCornerIds.map(cornerDisc)}
-                {rightCornerIds.map(cornerDisc)}
+                {ladder.minimal ? null : leftCornerIds.map(cornerDisc)}
+                {ladder.minimal ? null : rightCornerIds.map(cornerDisc)}
+                <GlassDisc
+                  icon={ResumeIcon}
+                  size={44}
+                  label="Recordings"
+                  onPress={() => router.push("/settings/recordings")}
+                />
               </View>
               <View pointerEvents="box-none" className="flex-row items-center justify-between">
                 <ColorDiamond
-                  label={CONTROL.camera.label}
-                  active={panel === "camera"}
-                  onPress={() => togglePanel("camera")}
+                  label="Image"
+                  active={panel === "image"}
+                  onPress={() => togglePanel("image")}
                 />
                 <ShutterButton label={primary.label} mode={primary.mode} onPress={primary.onPress} />
                 {micControl}
@@ -2301,6 +2536,18 @@ export default function BroadcastScreen() {
       ) : null}
 
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} items={moreItems} />
+
+      <SettingsGrid
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onTile={(tile) => {
+          setSettingsOpen(false);
+          const route = routeForTile(tile);
+          // Hardware and stabilisation live on the viewfinder's Camera panel.
+          if (route) router.push(route as Href);
+          else setPanel("camera");
+        }}
+      />
     </View>
   );
 }
@@ -2334,11 +2581,11 @@ const Reticles = memo(ReticlesView);
  * busy JavaScript gets - the meter froze first in an hour-long class when JS
  * drew it. An older build falls back to the JS meter. Same 16 x 129 footprint.
  */
-function Meter({ muted }: { muted: boolean }) {
+function Meter({ muted, maxFps }: { muted: boolean; maxFps: number }) {
   if (LevelMeterView) {
     return (
       <View className="items-center gap-1.5">
-        <LevelMeterView muted={muted} style={{ width: 16, height: 129 }} />
+        <LevelMeterView muted={muted} maxFps={maxFps} style={{ width: 16, height: 129 }} />
         {muted ? (
           <Text className="text-[10px] font-semibold uppercase text-filmic-alert">Muted</Text>
         ) : null}
@@ -2447,6 +2694,17 @@ function EncoderStatsPanel({ live, onClose }: { live: boolean; onClose: () => vo
       <Readout label="Outgoing picture" value={stats ? (stats.videoMuted ? "held" : "moving") : "-"} />
     </Panel>
   );
+}
+
+/** The preferences the viewfinder acts on, from the Device and Interface pages. */
+function viewPrefsOf(prefs: ReturnType<typeof loadPreferences>) {
+  return {
+    dimWhenIdle: prefs.dimWhenIdle,
+    thermalLadder: prefs.thermalLadder,
+    readoutStrip: prefs.readoutStrip,
+    peakingColor: prefs.peakingColor,
+    zebraThreshold: prefs.zebraThreshold,
+  };
 }
 
 /** What the aid tag says while an analytics aid recolours the picture. */

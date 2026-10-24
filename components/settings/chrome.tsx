@@ -1,16 +1,14 @@
+import { useIsFocused } from "@react-navigation/native";
 import { Stack, useRouter } from "expo-router";
-import {
-  ArrowUpRight,
-  ChevronLeft,
-  ChevronRight,
-  type LucideIcon,
-} from "lucide-react-native";
-import { cssInterop } from "nativewind";
+import { StatusBar } from "expo-status-bar";
+import { ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react-native";
+import { vars } from "nativewind";
 import { Children, type ReactElement, type ReactNode } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Text } from "@/components/ui/text";
+import { filmic } from "@/lib/theme/filmic";
 
 /**
  * The furniture every settings screen is built from.
@@ -31,21 +29,56 @@ import { Text } from "@/components/ui/text";
  */
 
 /**
- * Same treatment `lib/icons/iconWithClassName` applies, so `h-5 w-5
- * text-muted-foreground` on a glyph means here what it means everywhere else.
+ * Filmic's settings are a light panel, not the dark chrome of the viewfinder:
+ * they are read in a lit room before the broadcast, and the switch from
+ * picture to paper says "you are configuring now, not shooting".
+ *
+ * The app is pinned to dark mode, so the semantic classes (`bg-card`,
+ * `text-foreground`) resolve to the dark palette. The primitives below use
+ * these literals instead, and `Page` re-points the semantic variables for
+ * everything inside it - so a footer or a Block a page draws itself with
+ * `text-muted-foreground` is dark grey on paper rather than the dark theme's
+ * pale grey, which would all but vanish on it.
  */
-function withClassName(...icons: LucideIcon[]) {
-  for (const icon of icons) {
-    cssInterop(icon, {
-      className: {
-        target: "style",
-        nativeStyleToProp: { color: true, opacity: true, width: true, height: true },
-      },
-    });
-  }
-}
+export const paper = {
+  page: "#EEEEEE",
+  card: "#FFFFFF",
+  ink: "#1C1C1E",
+  inkMuted: "#6B6B70",
+  line: "rgba(0,0,0,0.12)",
+  /** The off track of a switch and the outline of an unselected pill. */
+  track: "#D1D1D6",
+  accent: filmic.color.accent,
+  accentInk: filmic.color.accentInk,
+} as const;
 
-withClassName(ArrowUpRight, ChevronLeft, ChevronRight);
+/** Space-separated HSL, the form global.css declares its variables in. */
+const LIGHT_VARS = vars({
+  "--background": "0 0% 93%",
+  "--foreground": "240 3% 11%",
+  "--card": "0 0% 100%",
+  "--card-foreground": "240 3% 11%",
+  "--popover": "0 0% 100%",
+  "--popover-foreground": "240 3% 11%",
+  "--primary": "240 3% 11%",
+  "--primary-foreground": "0 0% 100%",
+  "--secondary": "240 5% 90%",
+  "--secondary-foreground": "240 3% 11%",
+  "--muted": "240 5% 83%",
+  "--muted-foreground": "240 2% 43%",
+  "--accent": "240 5% 90%",
+  "--accent-foreground": "240 3% 11%",
+  "--destructive": "4 80% 46%",
+  "--destructive-foreground": "0 0% 100%",
+  "--border": "0 0% 88%",
+  "--input": "0 0% 88%",
+  "--ring": "40 90% 58%",
+});
+
+/** 15pt labels, as Filmic sets them; detail one step down. */
+const LABEL = { color: paper.ink, fontSize: 15, lineHeight: 20 } as const;
+const DETAIL = { color: paper.inkMuted, fontSize: 13, lineHeight: 17 } as const;
+const HAIRLINE = { borderColor: paper.line } as const;
 
 /**
  * These screens are pushed onto the root stack, which draws a header of its
@@ -95,27 +128,57 @@ export function Page({
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-background" edges={["top", "bottom"]}>
-      <Stack.Screen options={NO_NATIVE_HEADER} />
-      <View className="flex-row items-center gap-2 border-b border-hairline border-border px-3 py-2">
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          onPress={goBack}
-          hitSlop={8}
-          className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
+    <View className="flex-1" style={LIGHT_VARS}>
+      <SafeAreaView
+        className="flex-1"
+        style={{ backgroundColor: paper.page }}
+        edges={["top", "bottom"]}
+      >
+        <Stack.Screen options={NO_NATIVE_HEADER} />
+        <PaperStatusBar />
+        <View
+          className="flex-row items-center gap-2 border-b border-hairline px-3 py-2"
+          style={HAIRLINE}
         >
-          <ChevronLeft className="h-6 w-6 text-foreground" />
-        </Pressable>
-        <Text className="flex-1 text-lg font-semibold">{title}</Text>
-        {action}
-      </View>
-      <ScrollView className="flex-1" contentContainerClassName="gap-5 p-4 pb-16">
-        {intro ? <Text className="px-1 text-sm text-muted-foreground">{intro}</Text> : null}
-        {children}
-      </ScrollView>
-    </SafeAreaView>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={goBack}
+            hitSlop={8}
+            className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
+          >
+            <ChevronLeft size={24} color={paper.ink} />
+          </Pressable>
+          <Text className="flex-1 font-semibold" style={{ color: paper.ink, fontSize: 17 }}>
+            {title}
+          </Text>
+          {action}
+        </View>
+        <ScrollView className="flex-1" contentContainerClassName="gap-5 p-4 pb-16">
+          {intro ? (
+            <Text className="px-1" style={DETAIL}>
+              {intro}
+            </Text>
+          ) : null}
+          {children}
+        </ScrollView>
+      </SafeAreaView>
+    </View>
   );
+}
+
+/**
+ * Dark status-bar glyphs over the paper, while this screen is the one on top.
+ *
+ * The root layout asks for light glyphs because the rest of the app is dark.
+ * Settings is a tab that stays mounted behind the viewfinder, so mounting this
+ * unconditionally would leave dark glyphs over the Destinations screen after a
+ * visit here; rendering it only while focused pops it off the status-bar stack
+ * the moment the operator leaves.
+ */
+export function PaperStatusBar() {
+  const focused = useIsFocused();
+  return focused ? <StatusBar style="dark" /> : null;
 }
 
 /**
@@ -145,16 +208,26 @@ export function Group({
       {title || note ? (
         <View className="gap-1 px-1">
           {title ? (
-            <Text className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            <Text
+              className="text-[11px] font-semibold uppercase tracking-widest"
+              style={{ color: paper.inkMuted }}
+            >
               {title}
             </Text>
           ) : null}
-          {note ? <Text className="text-xs text-muted-foreground">{note}</Text> : null}
+          {note ? <Text style={DETAIL}>{note}</Text> : null}
         </View>
       ) : null}
-      <View className="overflow-hidden rounded-xl border border-hairline border-border bg-card">
+      <View
+        className="overflow-hidden rounded-xl border border-hairline"
+        style={{ ...HAIRLINE, backgroundColor: paper.card }}
+      >
         {rows.map((row, index) => (
-          <View key={row.key} className={index === 0 ? undefined : "border-t border-hairline border-border"}>
+          <View
+            key={row.key}
+            className={index === 0 ? undefined : "border-t border-hairline"}
+            style={index === 0 ? undefined : HAIRLINE}
+          >
             {row}
           </View>
         ))}
@@ -162,7 +235,7 @@ export function Group({
       {footer ? (
         <View className="gap-1.5 px-1">
           {typeof footer === "string" ? (
-            <Text className="text-xs text-muted-foreground">{footer}</Text>
+            <Text style={DETAIL}>{footer}</Text>
           ) : (
             footer
           )}
@@ -200,22 +273,24 @@ export function NavRow({
       className="min-h-[56px] flex-row items-center gap-3 px-4 py-2.5 active:opacity-60"
     >
       <View className="flex-1 gap-0.5">
-        <Text className="text-sm font-medium">{label}</Text>
+        <Text className="font-medium" style={LABEL}>
+          {label}
+        </Text>
         {detail ? (
-          <Text numberOfLines={2} className="text-xs text-muted-foreground">
+          <Text numberOfLines={2} style={DETAIL}>
             {detail}
           </Text>
         ) : null}
       </View>
       {value ? (
-        <Text numberOfLines={1} className="max-w-[40%] text-sm text-muted-foreground">
+        <Text numberOfLines={1} className="max-w-[40%]" style={{ ...LABEL, color: paper.inkMuted }}>
           {value}
         </Text>
       ) : null}
       {external ? (
-        <ArrowUpRight className="h-4 w-4 text-muted-foreground" />
+        <ArrowUpRight size={16} color={paper.inkMuted} />
       ) : (
-        <ChevronRight className="h-5 w-5 text-muted-foreground" />
+        <ChevronRight size={20} color={paper.inkMuted} />
       )}
     </Pressable>
   );
@@ -243,13 +318,19 @@ export function SwitchRow({
       className="min-h-[56px] flex-row items-center gap-4 px-4 py-2.5 active:opacity-60"
     >
       <View className="flex-1 gap-0.5">
-        <Text className="text-sm font-medium">{label}</Text>
-        {detail ? <Text className="text-xs text-muted-foreground">{detail}</Text> : null}
+        <Text className="font-medium" style={LABEL}>
+          {label}
+        </Text>
+        {detail ? <Text style={DETAIL}>{detail}</Text> : null}
       </View>
       <View
-        className={`h-7 w-12 justify-center rounded-full px-0.5 ${on ? "bg-filmic-accent" : "bg-muted"}`}
+        className="h-7 w-12 justify-center rounded-full px-0.5"
+        style={{ backgroundColor: on ? paper.accent : paper.track }}
       >
-        <View className={`h-6 w-6 rounded-full bg-background ${on ? "self-end" : "self-start"}`} />
+        <View
+          className={`h-6 w-6 rounded-full ${on ? "self-end" : "self-start"}`}
+          style={{ backgroundColor: paper.card }}
+        />
       </View>
     </Pressable>
   );
@@ -275,7 +356,9 @@ export function ChoiceRow<T extends string | number>({
 }) {
   return (
     <View className="gap-2 px-4 py-2.5">
-      <Text className="text-sm font-medium">{label}</Text>
+      <Text className="font-medium" style={LABEL}>
+        {label}
+      </Text>
       <View className="flex-row flex-wrap gap-2">
         {options.map((option) => {
           const selected = option.value === value;
@@ -288,12 +371,16 @@ export function ChoiceRow<T extends string | number>({
               accessibilityLabel={`${label}: ${option.label}`}
               accessibilityState={{ selected }}
               onPress={() => onChange(option.value)}
-              className={`min-h-[44px] justify-center rounded-full border px-4 ${
-                selected ? "border-filmic-accent bg-filmic-accent" : "border-hairline border-border"
-              }`}
+              className="min-h-[44px] justify-center rounded-full border px-4 active:opacity-60"
+              style={
+                selected
+                  ? { borderColor: paper.accent, backgroundColor: paper.accent }
+                  : { borderColor: paper.track, backgroundColor: paper.card }
+              }
             >
               <Text
-                className={`text-sm ${selected ? "font-semibold text-filmic-accentink" : "text-foreground"}`}
+                className={selected ? "font-semibold" : undefined}
+                style={{ ...LABEL, color: selected ? paper.accentInk : paper.ink }}
               >
                 {option.label}
               </Text>
@@ -309,8 +396,12 @@ export function ChoiceRow<T extends string | number>({
 export function ReadoutRow({ label, value }: { label: string; value: string }) {
   return (
     <View className="min-h-[44px] flex-row items-center justify-between gap-3 px-4 py-2.5">
-      <Text className="text-sm text-muted-foreground">{label}</Text>
-      <Text className="shrink font-mono text-sm tracking-tight" numberOfLines={1}>
+      <Text style={{ ...LABEL, color: paper.inkMuted }}>{label}</Text>
+      <Text
+        className="shrink font-mono tracking-tight"
+        style={{ ...LABEL, color: paper.ink }}
+        numberOfLines={1}
+      >
         {value}
       </Text>
     </View>

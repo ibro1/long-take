@@ -1,5 +1,6 @@
 import {
   AlignJustify,
+  Bookmark,
   Camera,
   ChevronDown,
   ChevronLeft,
@@ -72,6 +73,7 @@ function withClassName(...icons: LucideIcon[]) {
 }
 
 withClassName(
+  Bookmark,
   TriangleAlert,
   ChevronDown,
   Scan,
@@ -160,6 +162,8 @@ export {
   Palette as FalseColorIcon,
   /** Clipping: highlights that have run out of range, marked red. */
   TriangleAlert as ClippingIcon,
+  /** A saved camera setup, recalled from the drawer. */
+  Bookmark as PresetIcon,
   /** The drawer at the top of the frame: everything not on the glass. */
   ChevronDown as DrawerIcon,
   /** Analytics - peaking, zebras, false colour - behind one button, as Filmic keeps them. */

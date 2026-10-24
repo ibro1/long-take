@@ -17,12 +17,14 @@ import type {
   CamerasEvent,
   CodecSupport,
   EncoderSettings,
+  ExposureStateEvent,
   LevelEvent,
   LevelMeterViewProps,
   LogEntry,
   LogEvent,
   LogLevel,
   MonitorMode,
+  MonitorOptions,
   Orientation,
   PowerState,
   RecordEvent,
@@ -50,12 +52,14 @@ export type {
   CamerasEvent,
   CodecSupport,
   EncoderSettings,
+  ExposureStateEvent,
   LevelEvent,
   LevelMeterViewProps,
   LogEntry,
   LogEvent,
   LogLevel,
   MonitorMode,
+  MonitorOptions,
   Orientation,
   PowerState,
   RecordEvent,
@@ -208,8 +212,39 @@ export function setLevelEventInterval(ms: number): void {
 }
 
 /**
+ * The thermal ladder's bitrate cap, as a fraction of the configured video
+ * bitrate: 0.25-1, where 1 lifts the cap. Applied to a live encoder at once and
+ * to every later one, and the adaptive bitrate's climb back after congestion
+ * stops at the cap rather than undoing it. Lifting it with adaptive bitrate on
+ * climbs back gradually, as after congestion.
+ *
+ * Feature-detected like `sampleLuma`, so a dev client that predates it no-ops
+ * rather than throwing through the dev proxy.
+ */
+export function setThermalBitrateCap(fraction: number): void {
+  const fn = (nativeModule as Record<string, unknown>).setThermalBitrateCap;
+  if (typeof fn !== "function") return;
+  native.setThermalBitrateCap(fraction);
+}
+
+/**
+ * The app window's brightness, 0.05-1, or -1 to hand it back to the system.
+ * Only this app's window: the phone's own setting is untouched, and Android
+ * drops the override when the app leaves the screen.
+ *
+ * Feature-detected like `sampleLuma`; a no-op on a dev client that predates it,
+ * and on iOS, which has no native side for it.
+ */
+export function setScreenBrightness(fraction: number): void {
+  const fn = (nativeModule as Record<string, unknown>).setScreenBrightness;
+  if (typeof fn !== "function") return;
+  native.setScreenBrightness(fraction);
+}
+
+/**
  * The one encoder setting that is safe to change while live, and the one worth
  * changing: when the uplink is struggling, less data is better than a stall.
+ * Held under the thermal cap while one is set.
  */
 export function setVideoBitrate(bitsPerSecond: number): Promise<void> {
   return native.setVideoBitrate(bitsPerSecond);
@@ -271,7 +306,18 @@ export function supportedCodecs(): CodecSupport[] {
  * camera change: an ultra-wide and a main lens do not offer the same controls.
  */
 export function capabilities(): CameraCapabilities {
-  return native.capabilities();
+  /**
+   * The manual-control fields default to "not offered" where the native side
+   * does not send them - iOS, and an Android build older than them - so a
+   * screen can test `manualSensor` without first asking whether it exists.
+   */
+  return {
+    manualSensor: false,
+    isoRange: null,
+    exposureTimeRange: null,
+    manualWhiteBalance: false,
+    ...native.capabilities(),
+  };
 }
 
 export function setZoom(level: number): Promise<void> {
@@ -342,6 +388,59 @@ export function setMonitor(mode: MonitorMode): Promise<void> {
 /** The monitoring aid currently applied. */
 export function monitorMode(): MonitorMode {
   return native.monitorMode();
+}
+
+/**
+ * Tunes the monitoring aids: the peaking colour ("#RRGGBB") and threshold
+ * (0.05-0.4), and the zebra level (0.7-1). Kept natively across previews,
+ * applied to the aid on screen at once, and used by every aid shown after.
+ *
+ * Feature-detected like `sampleLuma`, so an older dev client keeps its
+ * defaults rather than throwing.
+ */
+export function setMonitorOptions(options: MonitorOptions): void {
+  const fn = (nativeModule as Record<string, unknown>).setMonitorOptions;
+  if (typeof fn !== "function") return;
+  native.setMonitorOptions(options);
+}
+
+/**
+ * Manual exposure: ISO and shutter (in nanoseconds) chosen by the operator,
+ * metering off. Clamped to `capabilities().isoRange` and `exposureTimeRange`
+ * (whose ceiling is one frame). Kept across lens changes and preview restarts,
+ * re-clamped for each lens; a lens without `manualSensor` meters as usual.
+ * Exposure compensation and the lock are kept but have no effect until
+ * `resumeAutoExposure`.
+ *
+ * Feature-detected like `sampleLuma`: resolves without doing anything on a
+ * build that predates it.
+ */
+export function setManualExposure(iso: number, exposureNs: number): Promise<void> {
+  const fn = (nativeModule as Record<string, unknown>).setManualExposure;
+  if (typeof fn !== "function") return Promise.resolve();
+  return native.setManualExposure(iso, exposureNs);
+}
+
+/**
+ * Hands exposure back to the camera's metering, with the compensation and the
+ * lock it had before manual. Feature-detected like `setManualExposure`.
+ */
+export function resumeAutoExposure(): Promise<void> {
+  const fn = (nativeModule as Record<string, unknown>).resumeAutoExposure;
+  if (typeof fn !== "function") return Promise.resolve();
+  return native.resumeAutoExposure();
+}
+
+/**
+ * White balance by colour temperature: kelvin 2000-10000, tint -50 (green) to
+ * 50 (magenta). Kept across lens changes and preview restarts; a lens without
+ * `capabilities().manualWhiteBalance` keeps its own. `setWhiteBalance` with any
+ * mode (1 for auto) ends it. Feature-detected like `setManualExposure`.
+ */
+export function setWhiteBalanceKelvin(kelvin: number, tint: number): Promise<void> {
+  const fn = (nativeModule as Record<string, unknown>).setWhiteBalanceKelvin;
+  if (typeof fn !== "function") return Promise.resolve();
+  return native.setWhiteBalanceKelvin(kelvin, tint);
 }
 
 /** Gives focus back to the camera. */
@@ -468,6 +567,7 @@ export function setExposureLock(on: boolean): Promise<void> {
 /**
  * An Android CONTROL_AWB_MODE value from `capabilities().whiteBalanceModes`.
  * Pass 1 - CONTROL_AWB_MODE_AUTO - to hand white balance back to the camera.
+ * Any mode ends `setWhiteBalanceKelvin`.
  */
 export function setWhiteBalance(mode: number): Promise<void> {
   return native.setWhiteBalance(mode);

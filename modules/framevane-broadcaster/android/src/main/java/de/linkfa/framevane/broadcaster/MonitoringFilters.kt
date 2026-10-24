@@ -134,10 +134,64 @@ void main() {
 }
 
 /**
+ * The operator's tuning for the two aids that have a knob: the peaking colour
+ * and sensitivity, and the zebra level.
+ *
+ * An object rather than fields on the view, for the same reason the level
+ * event interval lives on the view's companion: the screen sets these once,
+ * from settings, and the preview is torn down and rebuilt by every tab change.
+ * A preference kept on the view would be kept on nothing the moment the
+ * operator looked at another tab, and the next peaking filter would come back
+ * red at the default threshold with the settings screen claiming otherwise.
+ *
+ * Volatile because the writer is the JavaScript thread and the reader is the
+ * GL thread, every frame; each one is a single whole value, so nothing more
+ * than visibility is needed.
+ */
+internal object MonitorOptions {
+  /** filmic-alert-ish red, the colour peaking has always drawn in. */
+  const val DEFAULT_PEAKING_COLOR = 0xFF3030
+
+  /** The threshold the peaking filter shipped with; see [PeakingFilterRender]. */
+  const val DEFAULT_PEAKING_THRESHOLD = 0.13f
+
+  /** 235/255, the broadcast ceiling; see [ZebraFilterRender]. */
+  const val DEFAULT_ZEBRA_THRESHOLD = 0.92f
+
+  /** 0xRRGGBB, no alpha: the outline is always drawn opaque. */
+  @Volatile
+  var peakingColor = DEFAULT_PEAKING_COLOR
+
+  @Volatile
+  var peakingThreshold = DEFAULT_PEAKING_THRESHOLD
+
+  @Volatile
+  var zebraThreshold = DEFAULT_ZEBRA_THRESHOLD
+
+  /**
+   * `#RRGGBB` to 0xRRGGBB, or null for anything else.
+   *
+   * Strict on purpose. `Color.parseColor` would also take `#AARRGGBB` and
+   * named colours, and a translucent or misspelt outline is a peaking filter
+   * that quietly shows nothing - which reads as "nothing is in focus".
+   */
+  fun parseColor(value: String): Int? {
+    val hex = value.trim().removePrefix("#")
+    if (hex.length != 6) return null
+    return hex.toIntOrNull(16)
+  }
+}
+
+/**
  * Focus peaking: a thresholded 4-neighbour Sobel. Only transitions whose
  * gradient magnitude clears [threshold] are painted, so soft (out-of-focus)
  * gradients stay clear and the sharp focal plane reads as a thin coloured
  * outline - the Filmic behaviour, unlike the library's flood-fill edge filter.
+ *
+ * The colour and the threshold can be changed while the filter is on screen
+ * ([setColor], [threshold]): the operator tunes peaking by looking at it, and
+ * rebuilding the filter for every nudge of a slider would recompile the shader
+ * each time and blink the viewfinder.
  *
  * @param threshold 0..1 gradient magnitude cutoff; higher = more selective.
  */
@@ -145,12 +199,30 @@ class PeakingFilterRender(
   r: Int = 255,
   g: Int = 48,
   b: Int = 48,
-  private val threshold: Float = 0.13f,
+  threshold: Float = 0.13f,
 ) : ShaderFilterRender() {
 
-  private val edgeR = r / 255f
-  private val edgeG = g / 255f
-  private val edgeB = b / 255f
+  /**
+   * Written from the JavaScript thread, read on the GL thread every frame.
+   * Volatile per value; a frame that catches the red of the new colour with
+   * the green of the old one is one frame, and nobody can see it.
+   */
+  @Volatile
+  var threshold: Float = threshold
+
+  @Volatile
+  private var edgeR = r / 255f
+  @Volatile
+  private var edgeG = g / 255f
+  @Volatile
+  private var edgeB = b / 255f
+
+  /** A new outline colour as 0xRRGGBB, taken on the next frame. */
+  fun setColor(rgb: Int) {
+    edgeR = ((rgb shr 16) and 0xff) / 255f
+    edgeG = ((rgb shr 8) and 0xff) / 255f
+    edgeB = (rgb and 0xff) / 255f
+  }
 
   private var uTexel = -1
   private var uEdgeColor = -1
@@ -196,10 +268,15 @@ void main() {
  * diagonal black/white stripes - the classic overexposure warning.
  *
  * @param threshold 0..1 luma cutoff (0.92 ~ 235/255, the broadcast ceiling).
+ * Changeable while on screen, for the same reason peaking's is.
  */
 class ZebraFilterRender(
-  private val threshold: Float = 0.92f,
+  threshold: Float = 0.92f,
 ) : ShaderFilterRender() {
+
+  /** Written from the JavaScript thread, read on the GL thread every frame. */
+  @Volatile
+  var threshold: Float = threshold
 
   private var uThreshold = -1
   private var uTime = -1

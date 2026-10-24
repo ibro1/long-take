@@ -2,6 +2,8 @@ package de.linkfa.framevane.broadcaster
 
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.ModuleDefinitionBuilder
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 /**
  * The camera half of the module definition.
@@ -65,6 +67,31 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
 
   AsyncFunction("setExposureLock") { on: Boolean -> view().setExposureLock(on) }
 
+  /**
+   * Manual ISO and shutter, the shutter in nanoseconds. Clamped to the lens's
+   * `isoRange` and `exposureTimeRange` from `capabilities()`, whose shutter
+   * ceiling is already one frame. Doubles across the bridge because a
+   * shutter in nanoseconds can be past what an Int holds.
+   */
+  AsyncFunction("setManualExposure") { iso: Double, exposureNs: Double ->
+    val v = view()
+    v.setManualExposure(
+      if (iso.isNaN()) 0 else iso.roundToInt(),
+      if (exposureNs.isNaN()) 0L else exposureNs.roundToLong(),
+    )
+  }
+
+  /** Back to the camera's metering, with the compensation and lock it had. */
+  AsyncFunction("resumeAutoExposure") { view().resumeAutoExposure() }
+
+  /**
+   * White balance by temperature: kelvin 2000-10000, tint -50 (green) to 50
+   * (magenta). `setWhiteBalance` with any mode - 1 for auto - ends it.
+   */
+  AsyncFunction("setWhiteBalanceKelvin") { kelvin: Double, tint: Double ->
+    view().setWhiteBalanceKelvin(kelvin, tint)
+  }
+
   AsyncFunction("setWhiteBalance") { mode: Int -> view().setWhiteBalance(mode) }
 
   AsyncFunction("setStabilization") { on: Boolean -> view().setStabilization(on) }
@@ -76,4 +103,45 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
   AsyncFunction("setMonitor") { mode: String -> view().setMonitor(mode) }
 
   Function("monitorMode") { BroadcasterView.current?.monitorMode ?: "off" }
+
+  /**
+   * Tuning for the monitoring aids: `peakingColor` as "#RRGGBB",
+   * `peakingThreshold` 0.05-0.4 (higher marks only the sharpest edges),
+   * `zebraThreshold` 0.7-1 (luma). Any of them may be left out, and one that
+   * is malformed is ignored with a line in the log rather than failing the
+   * others.
+   *
+   * Synchronous and view-less, because the settings screen that sets these has
+   * no preview: they are kept in [MonitorOptions], applied to the aid on screen
+   * if there is one, and read by every aid built afterwards.
+   */
+  Function("setMonitorOptions") { options: Map<String, Any?> ->
+    val view = BroadcasterView.current
+    (options["peakingColor"] as? String)?.let { value ->
+      val rgb = MonitorOptions.parseColor(value)
+      if (rgb != null) {
+        MonitorOptions.peakingColor = rgb
+      } else {
+        view?.log(LOG_WARN, "Peaking colour '$value' is not #RRGGBB; keeping the current one")
+      }
+    }
+    (options["peakingThreshold"] as? Number)?.toFloat()?.takeIf { !it.isNaN() }?.let {
+      MonitorOptions.peakingThreshold = it.coerceIn(MIN_PEAKING_THRESHOLD, MAX_PEAKING_THRESHOLD)
+    }
+    (options["zebraThreshold"] as? Number)?.toFloat()?.takeIf { !it.isNaN() }?.let {
+      MonitorOptions.zebraThreshold = it.coerceIn(MIN_ZEBRA_THRESHOLD, 1f)
+    }
+    view?.applyMonitorOptions()
+    Unit
+  }
 }
+
+/**
+ * The ranges the monitoring aids are held to. Below 0.05 peaking marks sensor
+ * noise as edges and paints the whole frame; above 0.4 it marks almost nothing
+ * even in sharp focus. Zebras below 0.7 stripe ordinary skin, which is a
+ * mid-tone, not a warning.
+ */
+private const val MIN_PEAKING_THRESHOLD = 0.05f
+private const val MAX_PEAKING_THRESHOLD = 0.4f
+private const val MIN_ZEBRA_THRESHOLD = 0.7f

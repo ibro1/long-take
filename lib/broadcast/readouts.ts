@@ -30,9 +30,21 @@ export type Readouts = {
   stats: BroadcastStats | null;
   /** Newest first, as the log panel shows it. */
   log: LogEntry[];
+  /** The sensor's actual ISO, from capture results; null until reported. */
+  iso: number | null;
+  /** The sensor's actual exposure time in nanoseconds; null until reported. */
+  exposureNs: number | null;
 };
 
-let current: Readouts = { bitrate: 0, uptime: 0, recordSeconds: 0, stats: null, log: [] };
+let current: Readouts = {
+  bitrate: 0,
+  uptime: 0,
+  recordSeconds: 0,
+  stats: null,
+  log: [],
+  iso: null,
+  exposureNs: null,
+};
 const listeners = new Set<() => void>();
 
 /** Merge in what changed; listeners hear about it only if something did. */

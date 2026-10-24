@@ -143,6 +143,33 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
       invalidate()
     }
 
+  /**
+   * The most frames a second this meter redraws at, from JavaScript; 30 by
+   * default, which is more than an eye reads a meter at.
+   *
+   * The thermal ladder lowers it to 5 on a hot phone. Every frame is a wakeup
+   * of the UI thread and, when the level moved, a redraw - small on its own,
+   * but on a phone that is already throttling, everything the UI thread does
+   * competes with the encoder for the same heat budget. Five frames a second
+   * still says "the microphone is alive", which is the one job the meter has
+   * that cannot be given up; the clip cap and the hold mark are timed by the
+   * clock, not by frames, so they still hold for as long as they should.
+   *
+   * Held between 1 and 60: below one a meter is a still picture, above sixty
+   * no phone's display shows the difference. A change is taken at the next
+   * frame - the loop reads [frameMs] each time it schedules itself.
+   */
+  var maxFps: Double = DEFAULT_MAX_FPS
+    set(value) {
+      val fps = if (value.isNaN()) DEFAULT_MAX_FPS else value.coerceIn(MIN_FPS, MAX_FPS)
+      field = fps
+      frameMs = (1000.0 / fps).toLong().coerceAtLeast(1L)
+    }
+
+  /** The frame interval [maxFps] works out to; see [tick]. */
+  @Volatile
+  private var frameMs = FRAME_MS
+
   private val density = resources.displayMetrics.density
 
   /** The same gap the JavaScript meter used, 3dp, unless the view is tiny. */
@@ -237,9 +264,10 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
    * One frame of the meter: fold in what arrived, age the hold and the clip
    * cap, and invalidate only if any of it changed what is on the glass.
    *
-   * Runs at most every [FRAME_MS] - about thirty times a second, which is more
-   * than an eye reads a meter at and a fraction of what the audio thread
-   * produces - and stops altogether once nothing is moving, so a meter on a
+   * Runs at most every [frameMs] - about thirty times a second by default,
+   * which is more than an eye reads a meter at and a fraction of what the
+   * audio thread produces, and fewer when [maxFps] asks for fewer - and stops
+   * altogether once nothing is moving, so a meter on a
    * screen with no microphone running costs nothing at all.
    */
   private val tick: Runnable = object : Runnable {
@@ -276,7 +304,7 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
       invalidateIfChanged(now)
 
       if (moving && isAttachedToWindow) {
-        postDelayed(this, FRAME_MS)
+        postDelayed(this, frameMs)
         return
       }
       // Stopping. Cleared first and then re-checked, so a sample that landed
@@ -504,7 +532,19 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     drawnChannels = 1
   }
 
-  private companion object {
+  /**
+   * Internal rather than private only so the module's `maxFps` prop can fall
+   * back to [DEFAULT_MAX_FPS]; nothing outside this file has any other use for
+   * these.
+   */
+  internal companion object {
+    /** What [maxFps] is when JavaScript does not say. */
+    const val DEFAULT_MAX_FPS = 30.0
+
+    /** The range [maxFps] is held to. */
+    const val MIN_FPS = 1.0
+    const val MAX_FPS = 60.0
+
     /** As in level-meter.tsx. */
     const val SEGMENTS = 12
 
@@ -525,7 +565,7 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     /** About 35%: plainly still there, plainly not live. */
     const val MUTED_ALPHA = 90
 
-    /** ~30 frames a second. */
+    /** ~30 frames a second: [DEFAULT_MAX_FPS] as an interval. */
     const val FRAME_MS = 33L
 
     /** How long the peak-hold mark takes to sink to nothing. */

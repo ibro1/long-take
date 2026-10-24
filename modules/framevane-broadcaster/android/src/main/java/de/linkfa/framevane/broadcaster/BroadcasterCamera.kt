@@ -2,8 +2,13 @@ package de.linkfa.framevane.broadcaster
 
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.RggbChannelVector
 import android.os.SystemClock
 import android.view.MotionEvent
+import kotlin.math.ln
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * The camera controls, kept apart from the view itself.
@@ -24,7 +29,7 @@ import android.view.MotionEvent
  * `torch` says whether the lens has a flash at all rather than whether it is
  * lit, because `isTorchOn` already answers that.
  */
-internal fun BroadcasterView.capabilities(): Map<String, Any> {
+internal fun BroadcasterView.capabilities(): Map<String, Any?> {
   if (runCatching { camera.isRunning() }.getOrNull() != true) return unavailableCapabilities()
 
   val characteristics = currentCharacteristics()
@@ -104,8 +109,113 @@ internal fun BroadcasterView.capabilities(): Map<String, Any> {
         CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES,
       )?.toList() ?: emptyList<Int>()),
     "antiFlicker" to antiFlicker,
+    /**
+     * Manual exposure and white balance, each offered only where the lens
+     * says it can do the whole thing - see [manualSensorSupported] and
+     * [manualWhiteBalanceSupported]. A phone that half-supports either does
+     * something different on every model, and a control that works on the
+     * operator's phone and not on the one they borrow is worse than none.
+     */
+    "manualSensor" to manualSensorSupported(characteristics),
+    "isoRange" to isoRange(characteristics)?.let { mapOf("min" to it.first, "max" to it.second) },
+    "exposureTimeRange" to exposureTimeRange(characteristics)?.let {
+      // Doubles: a lens's longest exposure in nanoseconds can be past what an
+      // Int holds, and JavaScript numbers are doubles anyway.
+      mapOf("minNs" to it.first.toDouble(), "maxNs" to it.second.toDouble())
+    },
+    "manualWhiteBalance" to manualWhiteBalanceSupported(characteristics),
     "available" to true,
   )
+}
+
+/**
+ * Whether this lens lets the request set ISO and shutter itself.
+ *
+ * MANUAL_SENSOR is the capability that promises CONTROL_AE_MODE_OFF,
+ * SENSOR_SENSITIVITY, SENSOR_EXPOSURE_TIME and SENSOR_FRAME_DURATION all work.
+ * Without it, AE_MODE_OFF is not even in the lens's list of AE modes, and
+ * asking for it is somewhere between ignored and a session error depending on
+ * the phone.
+ */
+internal fun manualSensorSupported(characteristics: CameraCharacteristics?): Boolean =
+  hasCapability(
+    characteristics,
+    CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR,
+  )
+
+/**
+ * Whether this lens lets the request set the white balance gains itself.
+ *
+ * Two things, because Camera2 splits the promise in two. MANUAL_POST_PROCESSING
+ * is the capability that guarantees COLOR_CORRECTION_MODE_TRANSFORM_MATRIX
+ * with its gains and transform - Camera2 has no characteristics key listing
+ * colour-correction modes, so the capability is the only way to ask. And the
+ * gains only reach the picture with AWB off, so AWB_MODE_OFF has to be one of
+ * the lens's AWB modes as well.
+ */
+internal fun manualWhiteBalanceSupported(characteristics: CameraCharacteristics?): Boolean {
+  if (!hasCapability(
+      characteristics,
+      CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING,
+    )
+  ) {
+    return false
+  }
+  val awbModes = characteristics?.let {
+    runCatching { it.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES) }.getOrNull()
+  }
+  return awbModes?.contains(CameraCharacteristics.CONTROL_AWB_MODE_OFF) == true
+}
+
+private fun hasCapability(characteristics: CameraCharacteristics?, capability: Int): Boolean {
+  val available = characteristics?.let {
+    runCatching { it.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) }.getOrNull()
+  }
+  return available?.contains(capability) == true
+}
+
+/** SENSOR_INFO_SENSITIVITY_RANGE as (min, max), or null where the lens does not say. */
+private fun isoRange(characteristics: CameraCharacteristics?): Pair<Int, Int>? {
+  val range = characteristics?.let {
+    runCatching { it.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) }.getOrNull()
+  } ?: return null
+  return range.lower to range.upper
+}
+
+/**
+ * The frame rate the camera is running at, for the shutter's ceiling and the
+ * frame duration.
+ *
+ * The camera source's own figure first: `prepareVideo` hands the configured fps
+ * to `VideoSource.init`, and `Camera2Source.start` gives that same number to
+ * Camera2ApiManager, which builds the target fps range from it - so
+ * `camera.fps` is the rate the repeating request asks for. The configured
+ * [BroadcasterView.videoFps] covers the moment before the source has been
+ * initialised at all.
+ */
+internal fun BroadcasterView.captureFps(): Int {
+  val source = runCatching { camera.fps }.getOrNull() ?: 0
+  return (if (source > 0) source else videoFps).coerceAtLeast(1)
+}
+
+/** One frame at [fps], in nanoseconds: the longest a shutter can stay open without dropping frames. */
+private fun frameNs(fps: Int): Long = NANOS_PER_SECOND / fps.coerceAtLeast(1)
+
+/**
+ * SENSOR_INFO_EXPOSURE_TIME_RANGE as (minNs, maxNs), with the maximum held to
+ * one frame at the current frame rate, or null where the lens does not say.
+ *
+ * Phones list exposures of a second or more for stills, and a shutter open
+ * longer than a frame is a frame that cannot be delivered on time: at 30 fps,
+ * 1/15s halves the frame rate of the broadcast. Offering the operator that end
+ * of the range would offer them a stuttering stream with a brighter picture.
+ */
+private fun BroadcasterView.exposureTimeRange(characteristics: CameraCharacteristics?): Pair<Long, Long>? {
+  val range = characteristics?.let {
+    runCatching { it.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE) }.getOrNull()
+  } ?: return null
+  val max = minOf(range.upper, frameNs(captureFps()))
+  return range.lower to max.coerceAtLeast(range.lower)
 }
 
 /**
@@ -148,7 +258,7 @@ private fun evStep(characteristics: CameraCharacteristics?): Double {
 }
 
 /** Nothing is meaningful without a camera, and saying so beats inventing it. */
-internal fun unavailableCapabilities(): Map<String, Any> = mapOf(
+internal fun unavailableCapabilities(): Map<String, Any?> = mapOf(
   "zoom" to mapOf("min" to 1.0, "max" to 1.0, "current" to 1.0),
   "exposure" to mapOf(
     "min" to 0,
@@ -171,6 +281,10 @@ internal fun unavailableCapabilities(): Map<String, Any> = mapOf(
   "whiteBalance" to CameraCharacteristics.CONTROL_AWB_MODE_AUTO,
   "autoWhiteBalance" to true,
   "torch" to false,
+  "manualSensor" to false,
+  "isoRange" to null,
+  "exposureTimeRange" to null,
+  "manualWhiteBalance" to false,
   "available" to false,
 )
 
@@ -237,7 +351,28 @@ internal fun BroadcasterView.setExposure(value: Int) {
     log(LOG_WARN, "Could not set exposure: ${it.message}")
     return
   }
+  /**
+   * Kept as the camera took it - after RootEncoder's clamp - so that it can
+   * be put back: by [resumeAutoExposure] after a spell in manual, and by
+   * [reapplyCaptureRequest] after a restart, which builds a request at the
+   * template's zero. Marking the request overridden is what has the restart
+   * put it back at all.
+   *
+   * Under manual exposure the camera ignores compensation, but RootEncoder
+   * still writes it into the request; that is harmless, and this is where it
+   * is remembered for when the metering comes back.
+   */
+  exposureCompensation = runCatching { camera.getExposure() }.getOrNull() ?: value
+  captureRequestOverridden = true
   log(LOG_INFO, "Exposure compensation set to $value steps")
+}
+
+/** [BroadcasterView.exposureCompensation] held to this lens's own range. */
+private fun BroadcasterView.compensationFor(characteristics: CameraCharacteristics?): Int {
+  val range = characteristics?.let {
+    runCatching { it.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE) }.getOrNull()
+  } ?: return exposureCompensation
+  return exposureCompensation.coerceIn(range.lower, range.upper)
 }
 
 /**
@@ -259,6 +394,16 @@ internal fun BroadcasterView.setExposure(value: Int) {
  * so lock and stepper work together rather than cancelling out.
  */
 internal fun BroadcasterView.setExposureLock(on: Boolean) {
+  /**
+   * Under manual exposure the lock has nothing to hold - the metering is not
+   * running - so it is kept, not sent, and goes on with the metering when
+   * [resumeAutoExposure] hands exposure back.
+   */
+  if (manualExposure) {
+    exposureLocked = on
+    log(LOG_INFO, "Exposure lock ${if (on) "on" else "off"}, for when exposure is automatic again")
+    return
+  }
   val applied = runCatching {
     camera.setCustomRequest { it.set(CaptureRequest.CONTROL_AE_LOCK, on) }
   }.getOrNull() ?: false
@@ -299,6 +444,37 @@ private fun aeLockAvailable(characteristics: CameraCharacteristics?): Boolean {
  * correcting one.
  */
 internal fun BroadcasterView.setWhiteBalance(mode: Int) {
+  /**
+   * Any mode chosen here ends kelvin white balance - this is how the operator
+   * gets back from it, mode 1 being auto. Cleared first, so a restart in the
+   * middle cannot put kelvin back over the mode just chosen.
+   *
+   * Mode 0 from kelvin keeps the kelvin gains in the request, so "hold the
+   * white balance where it is" holds the temperature that was dialled in,
+   * which is where it is. Every other mode has the AWB routine overriding the
+   * colour pipeline anyway; the colour-correction mode is still put back to
+   * FAST after it, so nothing of the manual matrix is left behind for a HAL
+   * that reads it regardless.
+   */
+  val leavingKelvin = kelvinWhiteBalance
+  kelvinWhiteBalance = false
+  if (leavingKelvin && mode != CameraCharacteristics.CONTROL_AWB_MODE_OFF) {
+    val applied = runCatching { camera.enableAutoWhiteBalance(mode) }.getOrNull() ?: false
+    runCatching {
+      camera.setCustomRequest {
+        it.set(
+          CaptureRequest.COLOR_CORRECTION_MODE,
+          CameraCharacteristics.COLOR_CORRECTION_MODE_FAST,
+        )
+      }
+    }
+    if (applied) {
+      log(LOG_INFO, "White balance mode set to $mode; kelvin off")
+    } else {
+      log(LOG_WARN, "This lens does not support white balance mode $mode")
+    }
+    return
+  }
   if (mode == CameraCharacteristics.CONTROL_AWB_MODE_OFF) {
     runCatching { camera.disableAutoWhiteBalance() }.onFailure {
       log(LOG_WARN, "Could not lock white balance: ${it.message}")
@@ -496,6 +672,274 @@ internal fun BroadcasterView.setAntiFlicker(mode: Int) {
   }
 }
 
+// --- Manual exposure ----------------------------------------------------
+
+private const val NANOS_PER_SECOND = 1_000_000_000L
+
+/**
+ * ISO and shutter as this lens can take them: each clamped into the lens's own
+ * range, the shutter also to one frame (see [exposureTimeRange]), and the frame
+ * duration that goes with them. Null when the lens does not report the ranges,
+ * which a MANUAL_SENSOR lens is required to.
+ */
+private data class ManualExposure(val iso: Int, val exposureNs: Long, val frameNs: Long)
+
+private fun BroadcasterView.manualExposureFor(
+  characteristics: CameraCharacteristics?,
+  iso: Int,
+  exposureNs: Long,
+): ManualExposure? {
+  val isoLimits = isoRange(characteristics) ?: return null
+  val timeLimits = exposureTimeRange(characteristics) ?: return null
+  return ManualExposure(
+    iso = iso.coerceIn(isoLimits.first, isoLimits.second),
+    exposureNs = exposureNs.coerceIn(timeLimits.first, timeLimits.second),
+    /**
+     * One frame at the camera's rate, never shorter than the shutter.
+     *
+     * With AE off the camera stops choosing the frame duration as well as the
+     * exposure, and CONTROL_AE_TARGET_FPS_RANGE is ignored with it - so a
+     * request that leaves SENSOR_FRAME_DURATION at the template's value runs
+     * at whatever rate the template happened to carry. On a 60 fps broadcast
+     * that is typically 30, and the picture would halve its frame rate the
+     * moment the operator touched ISO. Setting it to the stream's own frame is
+     * what keeps manual exposure from changing anything but exposure.
+     */
+    frameNs = maxOf(frameNs(captureFps()), exposureNs.coerceIn(timeLimits.first, timeLimits.second)),
+  )
+}
+
+/** Writes manual exposure into a capture request; see [setManualExposure]. */
+private fun CaptureRequest.Builder.putManualExposure(values: ManualExposure) {
+  set(CaptureRequest.CONTROL_AE_MODE, CameraCharacteristics.CONTROL_AE_MODE_OFF)
+  set(CaptureRequest.SENSOR_SENSITIVITY, values.iso)
+  set(CaptureRequest.SENSOR_EXPOSURE_TIME, values.exposureNs)
+  set(CaptureRequest.SENSOR_FRAME_DURATION, values.frameNs)
+}
+
+/**
+ * Manual exposure: the operator chooses the ISO and the shutter, and the
+ * camera stops metering.
+ *
+ * Not the lock. [setExposureLock] holds whatever the meter settled on; this
+ * says what the exposure is, which is what a broadcast needs when the meter is
+ * being fooled - a speaker in a spotlight against a dark hall, where every
+ * metering mode either burns the face or loses the room. The shutter also
+ * matters on its own: at 1/50 or 1/60 under mains lighting, the flicker bands
+ * vanish without anti-flicker having to guess.
+ *
+ * Both values are clamped to the lens, and the shutter to one frame (see
+ * [exposureTimeRange]); the values asked for are kept as asked, so a lens
+ * change clamps them afresh for the new lens. Kept on the view and put back by
+ * [reapplyCaptureRequest], because every lens open and preview restart builds
+ * a new request from the camera's template.
+ *
+ * Exposure compensation and the AE lock mean nothing with the meter off and
+ * are left where they are, stored, for [resumeAutoExposure] to restore.
+ */
+internal fun BroadcasterView.setManualExposure(iso: Int, exposureNs: Long) {
+  val characteristics = currentCharacteristics()
+  if (!manualSensorSupported(characteristics)) {
+    log(LOG_WARN, "This lens has no manual exposure; it keeps metering")
+    return
+  }
+  val values = manualExposureFor(characteristics, iso, exposureNs)
+  if (values == null) {
+    log(LOG_WARN, "This lens did not report its ISO and shutter ranges; it keeps metering")
+    return
+  }
+  val applied = runCatching {
+    camera.setCustomRequest { it.putManualExposure(values) }
+  }.getOrNull() ?: false
+  if (!applied) {
+    log(LOG_WARN, "The camera would not take a manual exposure")
+    return
+  }
+  manualExposure = true
+  manualIso = iso
+  manualExposureNs = exposureNs
+  captureRequestOverridden = true
+  log(
+    LOG_INFO,
+    "Exposure manual: ISO ${values.iso}, 1/${shutterDenominator(values.exposureNs)}s",
+  )
+  // Without the capture results there is no other way the readout learns.
+  if (!captureResultsWired) emitRequestedExposure()
+}
+
+/** 1/x for a log line: what an operator reads a shutter as. */
+private fun shutterDenominator(exposureNs: Long): Int =
+  if (exposureNs <= 0L) 0 else (NANOS_PER_SECOND.toDouble() / exposureNs).roundToInt()
+
+/**
+ * Hands exposure back to the camera, with the compensation and the lock the
+ * operator had before going manual.
+ *
+ * All three in one request. AE_MODE_ON alone would come back metering at
+ * whatever compensation is in the builder - which, after a restart while
+ * manual, is the template's zero rather than the operator's - and unlocked,
+ * so a lock they set before going manual would be silently gone. The
+ * compensation comes from what [setExposure] kept, not from the builder, for
+ * exactly that reason.
+ */
+internal fun BroadcasterView.resumeAutoExposure() {
+  val compensation = compensationFor(currentCharacteristics())
+  val applied = runCatching {
+    camera.setCustomRequest {
+      it.set(CaptureRequest.CONTROL_AE_MODE, CameraCharacteristics.CONTROL_AE_MODE_ON)
+      it.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compensation)
+      it.set(CaptureRequest.CONTROL_AE_LOCK, exposureLocked)
+    }
+  }.getOrNull() ?: false
+  if (!applied) {
+    log(LOG_WARN, "The camera would not go back to automatic exposure")
+    return
+  }
+  manualExposure = false
+  log(LOG_INFO, "Exposure back to automatic${if (exposureLocked) ", locked" else ""}")
+}
+
+// --- White balance by temperature ---------------------------------------
+
+private const val MIN_KELVIN = 2_000.0
+private const val MAX_KELVIN = 10_000.0
+private const val MAX_TINT = 50.0
+
+/**
+ * How far full tint moves the green gain: 0.3, so tint 50 is green at 0.7 and
+ * -50 is green at 1.3. Enough to correct the green cast of cheap LED panels
+ * and fluorescent tubes, which is what tint is for, without the far end
+ * becoming a colour effect.
+ */
+private const val TINT_STRENGTH = 0.3
+
+/**
+ * The gains are held inside this range. At 2000K the black-body curve's blue
+ * is close to zero, so the blue gain it implies runs to ten and more, which no
+ * sensor pipeline amplifies cleanly; eight is already four stops of blue.
+ */
+private const val MIN_GAIN = 0.125f
+private const val MAX_GAIN = 8f
+
+/**
+ * The colour of a black body at [kelvin], as 0..255 RGB.
+ *
+ * Tanner Helland's fit to the CIE 1964 10-degree black-body data, the
+ * approximation most camera and photo software uses for a kelvin slider: one
+ * curve per channel, either side of 6600K. It is a fit, not colorimetry - good
+ * to a few per cent across 1000-40000K, which is closer than any operator can
+ * judge a white balance by eye on a phone screen.
+ */
+private fun blackBodyRgb(kelvin: Double): Triple<Double, Double, Double> {
+  val t = kelvin / 100.0
+  val r = if (t <= 66.0) 255.0 else 329.698727446 * (t - 60.0).pow(-0.1332047592)
+  val g = if (t <= 66.0) {
+    99.4708025861 * ln(t) - 161.1195681661
+  } else {
+    288.1221695283 * (t - 60.0).pow(-0.0755148492)
+  }
+  val b = when {
+    t >= 66.0 -> 255.0
+    t <= 19.0 -> 0.0
+    else -> 138.5177312231 * ln(t - 10.0) - 305.0447927307
+  }
+  return Triple(r.coerceIn(0.0, 255.0), g.coerceIn(0.0, 255.0), b.coerceIn(0.0, 255.0))
+}
+
+/**
+ * The colour-correction gains that make light of [kelvin] read as white, with
+ * [tint] applied to green.
+ *
+ * Light of a temperature has that black body's colour, so neutralising it is
+ * dividing each channel by it. Normalised so green is 1 - the channel the
+ * sensor has twice as many of and the one Camera2's own AWB holds at unity -
+ * which leaves red as g/r and blue as g/b: 3200K tungsten comes out at roughly
+ * red 0.7, blue 1.5, pulling the orange out.
+ *
+ * Tint then moves green alone: positive is more magenta, which is less green,
+ * so the green gains come down. Both green channels together, because the
+ * Bayer pattern's two greens are the same colour and splitting them would draw
+ * a checkerboard.
+ */
+private fun kelvinGains(kelvin: Double, tint: Double): RggbChannelVector {
+  val (r, g, b) = blackBodyRgb(kelvin)
+  // A channel of zero is a gain of infinity; one code value is already past
+  // the clamp below, so it costs nothing in range.
+  val red = (g / r.coerceAtLeast(1.0)).toFloat().coerceIn(MIN_GAIN, MAX_GAIN)
+  val blue = (g / b.coerceAtLeast(1.0)).toFloat().coerceIn(MIN_GAIN, MAX_GAIN)
+  val green = (1.0 - (tint / MAX_TINT) * TINT_STRENGTH).toFloat().coerceIn(MIN_GAIN, MAX_GAIN)
+  return RggbChannelVector(red, green, green, blue)
+}
+
+/** The 3x3 identity as Camera2 wants it: numerator/denominator pairs, row by row. */
+private val IDENTITY_TRANSFORM = ColorSpaceTransform(
+  intArrayOf(
+    1, 1, 0, 1, 0, 1,
+    0, 1, 1, 1, 0, 1,
+    0, 1, 0, 1, 1, 1,
+  ),
+)
+
+/** Writes kelvin white balance into a capture request; see [setWhiteBalanceKelvin]. */
+private fun BroadcasterView.putKelvin(builder: CaptureRequest.Builder) {
+  val id: String? = runCatching { camera.getCurrentCameraId() }.getOrNull()
+  builder.set(CaptureRequest.CONTROL_AWB_MODE, CameraCharacteristics.CONTROL_AWB_MODE_OFF)
+  builder.set(
+    CaptureRequest.COLOR_CORRECTION_MODE,
+    CameraCharacteristics.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX,
+  )
+  builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, kelvinGains(whiteBalanceKelvin, whiteBalanceTint))
+  builder.set(
+    CaptureRequest.COLOR_CORRECTION_TRANSFORM,
+    id?.let { autoColorTransforms[it] } ?: IDENTITY_TRANSFORM,
+  )
+}
+
+/**
+ * White balance by colour temperature: [kelvin] 2000-10000, [tint] -50 (green)
+ * to 50 (magenta).
+ *
+ * The presets in [setWhiteBalance] are the camera's guesses at a few named
+ * lights, and auto is a guess that moves: a speaker in a blue shirt walks into
+ * shot and the whole room goes orange. A temperature the operator sets stays
+ * put, and matches between two phones filming the same hall, which no preset
+ * does.
+ *
+ * AWB off, colour correction in TRANSFORM_MATRIX mode, gains from the
+ * black-body curve ([kelvinGains]). The matrix is the one this lens's own auto
+ * white balance was last seen using, from its capture results, and identity
+ * only for a lens never seen in auto: see [BroadcasterView.autoColorTransforms]
+ * for why identity alone would flatten every colour.
+ *
+ * Kept on the view and put back by [reapplyCaptureRequest], like everything
+ * else set through the request. [setWhiteBalance] - any mode, 1 being auto -
+ * ends it.
+ */
+internal fun BroadcasterView.setWhiteBalanceKelvin(kelvin: Double, tint: Double) {
+  if (!manualWhiteBalanceSupported(currentCharacteristics())) {
+    log(LOG_WARN, "This lens has no manual white balance; it keeps its own")
+    return
+  }
+  val k = if (kelvin.isNaN()) BroadcasterView.DEFAULT_KELVIN else kelvin.coerceIn(MIN_KELVIN, MAX_KELVIN)
+  val t = if (tint.isNaN()) 0.0 else tint.coerceIn(-MAX_TINT, MAX_TINT)
+  val previousKelvin = whiteBalanceKelvin
+  val previousTint = whiteBalanceTint
+  whiteBalanceKelvin = k
+  whiteBalanceTint = t
+  val applied = runCatching { camera.setCustomRequest { putKelvin(it) } }.getOrNull() ?: false
+  if (!applied) {
+    // Back to what the request actually carries, so a restart does not put a
+    // temperature back that the camera never took.
+    whiteBalanceKelvin = previousKelvin
+    whiteBalanceTint = previousTint
+    log(LOG_WARN, "The camera would not take a white balance temperature")
+    return
+  }
+  kelvinWhiteBalance = true
+  captureRequestOverridden = true
+  log(LOG_INFO, "White balance ${k.roundToInt()}K, tint ${t.roundToInt()}")
+}
+
 /**
  * How long to keep offering the settings back to a session that is still
  * being built. A capture session takes a few hundred milliseconds to come up
@@ -507,7 +951,8 @@ private const val REAPPLY_INTERVAL_MS = 250L
 
 /**
  * Puts the capture-request settings back after the session was rebuilt:
- * noise reduction, anti-flicker, and the exposure lock.
+ * noise reduction, anti-flicker, the exposure lock, manual focus, manual
+ * exposure and kelvin white balance.
  *
  * `setCustomRequest` writes into the builder RootEncoder holds, and that
  * builder is made fresh by `createCaptureRequest` every time a lens is opened
@@ -529,20 +974,44 @@ private const val REAPPLY_INTERVAL_MS = 250L
 internal fun BroadcasterView.reapplyCaptureRequest(attempt: Int = 0) {
   if (!captureRequestOverridden) return
 
+  /**
+   * Manual exposure and kelvin white balance are worked out against the lens
+   * now open, not the one they were set on: the ranges, the frame rate and
+   * the colour matrix are all the lens's own. A lens that cannot do one of
+   * them simply does not get it - the camera meters, or balances, as it would
+   * have - and the choice is kept, so the next lens that can takes it back.
+   */
+  val characteristics = currentCharacteristics()
+  val manual = if (manualExposure && manualSensorSupported(characteristics)) {
+    manualExposureFor(characteristics, manualIso, manualExposureNs)
+  } else {
+    null
+  }
+  val kelvin = kelvinWhiteBalance && manualWhiteBalanceSupported(characteristics)
+
   val applied = runCatching {
     camera.setCustomRequest {
       it.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReduction)
       it.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, antiFlicker)
-      it.set(CaptureRequest.CONTROL_AE_LOCK, exposureLocked)
+      if (manual != null) {
+        // The lock and compensation mean nothing with the meter off; see
+        // [setManualExposure]. Both stay stored for [resumeAutoExposure].
+        it.putManualExposure(manual)
+      } else {
+        it.set(CaptureRequest.CONTROL_AE_LOCK, exposureLocked)
+        it.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, compensationFor(characteristics))
+      }
       if (manualFocus) {
         it.set(CaptureRequest.CONTROL_AF_MODE, CameraCharacteristics.CONTROL_AF_MODE_OFF)
         it.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
       }
+      if (kelvin) putKelvin(it)
     }
   }.getOrNull() ?: false
 
   if (applied) {
     log(LOG_INFO, "Camera settings put back on the new capture session")
+    if (manual != null && !captureResultsWired) emitRequestedExposure()
     return
   }
   if (attempt + 1 >= REAPPLY_TRIES) {

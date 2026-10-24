@@ -117,6 +117,26 @@ export type CameraCapabilities = {
    */
   antiFlickerModes: number[];
   antiFlicker: number;
+  /**
+   * Whether this lens takes a manual ISO and shutter (Camera2's MANUAL_SENSOR
+   * capability). Offer `setManualExposure` only when true.
+   */
+  manualSensor: boolean;
+  /** SENSOR_INFO_SENSITIVITY_RANGE, or null where the lens does not say. */
+  isoRange: { min: number; max: number } | null;
+  /**
+   * SENSOR_INFO_EXPOSURE_TIME_RANGE in nanoseconds, or null where the lens does
+   * not say. `maxNs` is capped at one frame of the current frame rate
+   * (1e9 / fps, from the camera source's configured fps): a longer shutter
+   * cannot deliver frames on time and would drop the broadcast's frame rate.
+   */
+  exposureTimeRange: { minNs: number; maxNs: number } | null;
+  /**
+   * Whether this lens takes white balance as gains (MANUAL_POST_PROCESSING,
+   * which is what guarantees COLOR_CORRECTION_MODE_TRANSFORM_MATRIX, and AWB
+   * OFF among its AWB modes). Offer `setWhiteBalanceKelvin` only when true.
+   */
+  manualWhiteBalance: boolean;
   /** False when no camera is open yet, in which case nothing else is meaningful. */
   available: boolean;
 };
@@ -350,6 +370,27 @@ export type BroadcastStats = {
 export type StatsEvent = BroadcastStats;
 
 /**
+ * What the sensor is actually exposing at, read from the camera's own capture
+ * results at most twice a second while the preview runs. In auto these are
+ * what the metering chose; in manual, what the sensor took after clamping -
+ * not what was asked for. `manual` is whether auto exposure is off.
+ */
+export type ExposureStateEvent = { iso: number; exposureNs: number; manual: boolean };
+
+/**
+ * Tuning for the monitoring aids; see `setMonitorOptions`. Every field is
+ * optional and an absent one is left as it was.
+ */
+export type MonitorOptions = {
+  /** "#RRGGBB". Anything else is ignored. */
+  peakingColor?: string;
+  /** Luma at or above which zebras stripe, 0.7-1. */
+  zebraThreshold?: number;
+  /** Edge strength peaking marks, 0.05-0.4; higher marks only the sharpest edges. */
+  peakingThreshold?: number;
+};
+
+/**
  * The native microphone level meter. It reads the level straight from the
  * microphone on the native side, so it keeps moving however busy JavaScript
  * is. Size it with `style` (the JavaScript meter it replaces was 16 wide by
@@ -358,6 +399,12 @@ export type StatsEvent = BroadcastStats;
 export type LevelMeterViewProps = {
   /** The whole meter fades while muted, so muted never reads as a dead microphone. */
   muted?: boolean;
+  /**
+   * The most frames a second the meter redraws at, 1-60; 30 when absent. The
+   * thermal ladder lowers it to 5 on a hot phone. A native build older than
+   * this prop ignores it.
+   */
+  maxFps?: number;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -372,4 +419,6 @@ export type BroadcasterViewProps = ViewProps & {
   onAudioInterrupted?: (event: { nativeEvent: AudioInterruptedEvent }) => void;
   onThermal?: (event: { nativeEvent: ThermalEvent }) => void;
   onStats?: (event: { nativeEvent: StatsEvent }) => void;
+  /** Android only; a native build older than the event never fires it. */
+  onExposureState?: (event: { nativeEvent: ExposureStateEvent }) => void;
 };

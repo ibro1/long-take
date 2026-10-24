@@ -188,6 +188,29 @@ export type Preferences = {
    * Hausa or Arabic and English otherwise. See lib/i18n.
    */
   language: LanguageChoice;
+  /**
+   * Dim the screen after half a minute without a touch. A phone on a tripod is
+   * a lit panel nobody is looking at, and the panel is heat and battery.
+   */
+  dimWhenIdle: boolean;
+  /**
+   * Step down as the phone heats: a lower bitrate first, then the viewfinder
+   * aids (peaking, zebras) paused, before Android throttles the encoder for us.
+   */
+  thermalLadder: boolean;
+  /** The strip of numbers along the viewfinder - bitrate, time, battery, heat. */
+  readoutStrip: boolean;
+  /** The colour focus peaking paints edges in, as a #RRGGBB string. */
+  peakingColor: string;
+  /** Where zebra stripes start, as a fraction of full scale: 0.9, 0.95, 0.98. */
+  zebraThreshold: number;
+  /**
+   * The picture height a NEW destination starts at. A destination keeps its
+   * own once it exists; this only saves setting the same thing every time.
+   */
+  defaultHeight: number;
+  /** The frame rate a new destination starts at, as above. */
+  defaultFps: number;
 };
 
 export type LanguageChoice = "auto" | "en" | "ha" | "ar";
@@ -237,7 +260,50 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   quickAccess: ["photo", "pause", "flip"],
   haptics: true,
   language: "auto",
+  // Off: a dark screen mid-broadcast is alarming the first time, so it is
+  // something the operator asks for.
+  dimWhenIdle: false,
+  // On: easing off by a step beats Android throttling the encoder to a crawl.
+  thermalLadder: true,
+  readoutStrip: true,
+  peakingColor: "#FF3B30",
+  zebraThreshold: 0.95,
+  // The same picture DEFAULT_SETTINGS in pairing.ts gives a destination.
+  defaultHeight: 720,
+  defaultFps: 30,
 };
+
+/**
+ * The picture sizes a new destination can start at, all 16:9 - the width is
+ * what the encoder is handed alongside the height.
+ */
+export const DEFAULT_PICTURES = [
+  { label: "360p", width: 640, height: 360 },
+  { label: "720p", width: 1280, height: 720 },
+  { label: "1080p", width: 1920, height: 1080 },
+] as const;
+
+// The rates a destination can be set to (Destinations offers these two), so a
+// new destination never starts at a rate its own editor cannot show.
+export const DEFAULT_FRAME_RATES = [30, 60] as const;
+
+/**
+ * What a new destination is created with. A stored height that is not one of
+ * the rungs (hand-edited, or from a later build) falls back to 720p rather
+ * than handing the encoder a width nobody chose.
+ */
+export function defaultPicture(preferences: Preferences = loadPreferences()): {
+  width: number;
+  height: number;
+  fps: number;
+} {
+  const picture =
+    DEFAULT_PICTURES.find((p) => p.height === preferences.defaultHeight) ?? DEFAULT_PICTURES[1];
+  const fps = (DEFAULT_FRAME_RATES as readonly number[]).includes(preferences.defaultFps)
+    ? preferences.defaultFps
+    : 30;
+  return { width: picture.width, height: picture.height, fps };
+}
 
 /**
  * The size limit, in bytes. Not a preference: it is the largest file FAT32
