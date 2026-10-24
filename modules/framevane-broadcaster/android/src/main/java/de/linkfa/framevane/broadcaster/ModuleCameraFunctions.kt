@@ -48,6 +48,9 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
 
   AsyncFunction("setExposure") { value: Int -> view().setExposure(value) }
 
+  // The exposure reticle's position: meter the light where it sits.
+  AsyncFunction("setExposurePoint") { x: Float, y: Float -> view().setExposurePoint(x, y) }
+
   /**
    * Manual focus in dioptres - 1/metres, so 0 is infinity and the lens maximum
    * is as near as it goes. `capabilities().focusNear` is that maximum, and 0

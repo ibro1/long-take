@@ -14,7 +14,9 @@ import type { MonitorMode } from "@/modules/framevane-broadcaster";
  */
 const MODES: { mode: MonitorMode; label: string }[] = [
   { mode: "off", label: "Off" },
-  { mode: "peaking", label: "Peaking" },
+  { mode: "peaking", label: "Peak" },
+  { mode: "zebra", label: "Zebra" },
+  { mode: "falsecolor", label: "False" },
 ];
 
 export function MonitoringSelector({

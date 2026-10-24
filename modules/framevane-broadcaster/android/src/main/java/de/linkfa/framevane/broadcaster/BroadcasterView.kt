@@ -25,7 +25,6 @@ import com.pedro.encoder.input.sources.OrientationConfig
 import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
 import com.pedro.encoder.input.gl.render.filters.BaseFilterRender
-import com.pedro.encoder.input.gl.render.filters.EdgeDetectionFilterRender
 import com.pedro.encoder.input.sources.video.Camera2Source
 import com.pedro.encoder.input.video.CameraCallbacks
 import com.pedro.encoder.input.video.CameraHelper
@@ -1497,18 +1496,19 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   fun isVideoMuted(): Boolean =
     runCatching { stream.getGlInterface().isVideoMuted() }.getOrNull() ?: false
 
-  // --- Display-only monitoring (focus peaking) -------------------------
+  // --- Display-only monitoring (peaking / zebra / false colour) --------
   //
   // A monitoring aid is a RootEncoder GL filter over the preview. RootEncoder
   // applies filters to the encoder surface too, so one left on would burn into
   // the recording and the stream; it is therefore cleared the moment the
   // operator goes on air (clearMonitorForAir, from the go-live and record
-  // paths). Peaking reuses the library's own edge detector - red edges drawn
-  // over the live picture, a negative background meaning "keep the original".
+  // paths). The aids are our own BaseFilterRender subclasses (MonitoringFilters.kt):
+  // peaking is a thresholded Sobel outline, zebra marks blown highlights, false
+  // colour maps luma to an exposure palette.
 
   private var monitorFilter: BaseFilterRender? = null
 
-  /** The monitoring mode actually applied: "off" or "peaking". */
+  /** The monitoring mode actually applied: "off", "peaking", "zebra" or "falsecolor". */
   var monitorMode: String = "off"
     private set
 
@@ -1518,16 +1518,19 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     runCatching {
       gl.clearFilters()
       monitorFilter = null
-      when (mode) {
-        "peaking" -> {
-          // performanceMode=false is the Sobel path, the only one whose colour
-          // setters work; a negative background keeps the live picture.
-          val f = EdgeDetectionFilterRender(false)
-          f.setEdgeRGBColor(255, 48, 48)
-          f.setBackgroundRGBColor(-1, -1, -1)
-          gl.setFilter(f)
-          monitorFilter = f
-        }
+      val f: BaseFilterRender? = when (mode) {
+        // Thresholded Sobel: a thin red outline on only the sharp focal plane,
+        // not the library's flood of every edge. See [PeakingFilterRender].
+        "peaking" -> PeakingFilterRender(255, 48, 48)
+        // Marching stripes over blown highlights.
+        "zebra" -> ZebraFilterRender()
+        // Luma -> IRE exposure palette.
+        "falsecolor" -> FalseColorFilterRender()
+        else -> null
+      }
+      if (f != null) {
+        gl.setFilter(f)
+        monitorFilter = f
       }
       monitorMode = if (monitorFilter != null) mode else "off"
       log(LOG_INFO, "monitor: $monitorMode")

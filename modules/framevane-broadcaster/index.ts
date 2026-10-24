@@ -256,6 +256,22 @@ export function setExposure(value: number): Promise<void> {
 }
 
 /**
+ * Meter exposure where the operator put the exposure reticle, in fractions of
+ * the preview (0,0 top-left .. 1,1 bottom-right) - the independent AE point,
+ * separate from focus.
+ *
+ * Feature-detected against the raw module so it no-ops on a dev client that
+ * predates the native function, rather than throwing through the dev proxy:
+ * the reticle still moves and the EV trim still works, and the metering point
+ * follows once the newer native build is installed.
+ */
+export function setExposurePoint(x: number, y: number): Promise<void> {
+  const fn = (nativeModule as Record<string, unknown>).setExposurePoint;
+  if (typeof fn !== "function") return Promise.resolve();
+  return native.setExposurePoint(x, y);
+}
+
+/**
  * Holds the lens at a distance, in dioptres - 1/metres, so 0 is infinity and
  * `capabilities().focusNear` is as near as this lens goes.
  *

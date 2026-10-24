@@ -30,7 +30,7 @@ import {
 } from "@/lib/broadcast/settings";
 import { BatteryBar } from "@/components/broadcast/battery";
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
-import { ExposureRail, type FocusPoint } from "@/components/broadcast/exposure-rail";
+import { Reticles } from "@/components/broadcast/reticles";
 import { EdgeRails, type Rail } from "@/components/broadcast/edge-rails";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
@@ -103,6 +103,7 @@ import {
   type CameraInfo,
   type MonitorMode,
   type Orientation,
+  setExposurePoint,
   setMonitor,
 } from "@/modules/framevane-broadcaster";
 
@@ -784,27 +785,11 @@ export default function BroadcastScreen() {
     if (live && monitor !== "off") setMonitorMode("off");
   }, [live, monitor]);
 
-  const [focusPoint, setFocusPoint] = useState<FocusPoint | null>(null);
-  const [focusFrame, setFocusFrame] = useState({ width: 0, height: 0 });
   /**
    * In landscape the picture is not the whole screen: the control column down
-   * the trailing edge sits over it, and a rail placed under that column is a
-   * knob that cannot be reached.
+   * the trailing edge sits over it, so the reticles are kept clear of it.
    */
-  const railFrame = useMemo(
-    () =>
-      wide
-        ? { width: Math.max(0, focusFrame.width - COLUMN), height: focusFrame.height }
-        : focusFrame,
-    [wide, focusFrame],
-  );
-  const onTapPoint = useCallback(
-    (point: FocusPoint, frame: { width: number; height: number }) => {
-      setFocusPoint(point);
-      setFocusFrame(frame);
-    },
-    [],
-  );
+  const reticleInset = wide ? COLUMN : 0;
 
   // Nothing yet, rather than the wrong thing. The check takes a frame or two.
   if (!answered) {
@@ -1755,31 +1740,31 @@ export default function BroadcastScreen() {
           frame apart from the discs themselves. */}
       <TouchLayer
         canZoom={canZoom}
-        /* An open panel covers the picture, so a tap on it is aimed at the
-           panel and not at something to focus on behind it. */
-        canFocus={(capabilities?.available ?? false) && panel === null}
+        /* Focus now lives on the draggable focus reticle below; the touch
+           layer keeps only pinch-to-zoom so the two never fight over a drag. */
+        canFocus={false}
         zoom={zoom}
         range={zoomRange}
         onZoom={setZoom}
         onFocus={focusAt}
-        onTapPoint={onTapPoint}
       />
 
-      {/* Drawn after the touch layer, so the knob takes its own drag rather
-          than the picture underneath taking it as another tap to focus. */}
-      {canExpose ? (
-        <ExposureRail
-          point={focusPoint}
-          frame={railFrame}
-          value={exposure}
-          min={exposureRange.min}
-          max={exposureRange.max}
-          evStep={exposureRange.evStep}
-          locked={exposureLocked}
-          canLock={exposureRange.lockAvailable}
-          onChange={setExposure}
-          onLock={setExposureLock}
-        />
+      {/* The persistent Filmic reticles - focus and exposure pucks that stay on
+          the picture and are dragged to place each measurement. Drawn after the
+          touch layer so a puck takes its own drag rather than the picture
+          reading it as a pinch. Hidden while a panel covers the shot. */}
+      {panel === null && (capabilities?.available ?? false) ? (
+        <View pointerEvents="box-none" className="absolute inset-0">
+          <Reticles
+            canFocus={capabilities?.available ?? false}
+            canExpose={canExpose}
+            rightInset={reticleInset}
+            exposureLocked={exposureLocked}
+            onFocus={focusAt}
+            onExposurePoint={(x, y) => void setExposurePoint(x, y).catch(() => {})}
+            onExposureLock={setExposureLock}
+          />
+        </View>
       ) : null}
 
       {/* One full-frame state at a time, most urgent first: a reconnect is
