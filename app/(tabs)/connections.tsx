@@ -7,7 +7,14 @@ import * as FileSystem from "expo-file-system/legacy";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState, useContext } from "react";
-import { Alert, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import {
+  Alert,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  View,
+  StyleSheet,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -620,6 +627,36 @@ export default function ConnectionsScreen() {
   // In the settings panel: Filmic's form - flat rows on paper, the list you
   // came for first, adding and the account below it. Same actions as the
   // full-screen layout, which keeps its own frame.
+  if (panel && (draft || claiming)) {
+    const editing = draft !== null && connections.some((c) => c.id === draft.id);
+    return (
+      <PanelFrame
+        title={
+          draft
+            ? editing
+              ? "Edit destination"
+              : "New destination"
+            : claimFor === "account"
+              ? "Link with a code"
+              : "Pair with a code"
+        }
+        onBack={() => {
+          setDraft(null);
+          setClaiming(false);
+        }}
+      >
+        <ScrollView
+          className="flex-1"
+          keyboardShouldPersistTaps="handled"
+          contentContainerClassName="gap-4 p-3 pb-6"
+        >
+          {editorEl}
+          {pairingEl}
+        </ScrollView>
+      </PanelFrame>
+    );
+  }
+
   if (panel) {
     return (
       <PanelFrame title="Destinations">
@@ -636,8 +673,6 @@ export default function ConnectionsScreen() {
             />
           }
         >
-          {editorEl}
-          {pairingEl}
           <Group
             title="Send to"
             note={
@@ -765,6 +800,7 @@ function Editor({
   onSave: () => void;
   onCancel: () => void;
 }) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
   const set = <K extends keyof Connection>(key: K, value: Connection[K]) =>
     onChange({ ...connection, [key]: value });
 
@@ -1013,7 +1049,7 @@ function Editor({
   const advisory = problems.filter((problem) => !problem.blocking);
 
   return (
-    <View className="gap-3 rounded-2xl border border-border bg-card p-4">
+    <FormCard>
       <Field label={paired ? "Name, here and in the studio" : "Name"}>
         <Input
           value={connection.name}
@@ -1028,7 +1064,7 @@ function Editor({
         {paired ? (
           <>
             {titleSaved ? (
-              <Text className="text-xs text-emerald-400">
+              <Text className={`text-xs ${onPaper ? "text-emerald-700" : "text-emerald-400"}`}>
                 Saved. A broadcast already live is renamed on YouTube too.
               </Text>
             ) : null}
@@ -1418,14 +1454,15 @@ function Editor({
       ) : null}
 
       <View className="flex-row gap-2">
-        <Button className="flex-1" disabled={blocking.length > 0} onPress={onSave}>
-          <Text>{blocking.length > 0 ? "Fix the above to save" : "Save"}</Text>
-        </Button>
-        <Button variant="ghost" onPress={onCancel}>
-          <Text>Cancel</Text>
-        </Button>
+        <FormButton
+          primary
+          label={blocking.length > 0 ? "Fix the above to save" : "Save"}
+          disabled={blocking.length > 0}
+          onPress={onSave}
+        />
+        <FormButton label="Cancel" onPress={onCancel} />
       </View>
-    </View>
+    </FormCard>
   );
 }
 
@@ -1465,6 +1502,33 @@ function Choice({
   selected: boolean;
   onPress: () => void;
 }) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
+  if (onPaper) {
+    // The settings panel's choice: amber when chosen, a hairline pill otherwise.
+    return (
+      <Pressable
+        accessibilityRole="radio"
+        accessibilityLabel={label}
+        accessibilityState={{ checked: selected }}
+        onPress={onPress}
+        className="min-h-[40px] justify-center rounded-full px-3.5 py-2 active:opacity-60"
+        style={{
+          backgroundColor: selected ? paper.accent : paper.card,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: selected ? paper.accent : paper.track,
+        }}
+      >
+        <Text
+          style={[
+            { fontSize: 13, fontWeight: "600", color: selected ? paper.accentInk : paper.ink },
+            bidi(label),
+          ]}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    );
+  }
   return (
     <Pressable
       accessibilityRole="radio"
@@ -1538,11 +1602,15 @@ function CodePairing({
     onPaired(result);
   };
 
+  // On the panel the page's own title says this; the form needs no second one.
+  const onPaper = useContext(SettingsPanelContext) !== null;
   return (
-    <View className="gap-3 rounded-2xl border border-border p-4">
-      <Text className="text-base font-semibold">
-        {purpose === "account" ? "Link with a code" : "Pair with a code"}
-      </Text>
+    <FormCard>
+      {onPaper ? null : (
+        <Text className="text-base font-semibold">
+          {purpose === "account" ? "Link with a code" : "Pair with a code"}
+        </Text>
+      )}
 
       <Field label="Studio address">
         <Input
@@ -1577,16 +1645,15 @@ function CodePairing({
       {problem ? <Text className="text-sm text-destructive">{problem}</Text> : null}
 
       <View className="flex-row gap-2">
-        <Button className="flex-1" disabled={busy} onPress={() => void submit()}>
-          <Text>
-            {purpose === "account" ? (busy ? "Linking" : "Link") : busy ? "Pairing" : "Pair"}
-          </Text>
-        </Button>
-        <Button variant="outline" className="flex-1" disabled={busy} onPress={onCancel}>
-          <Text>Cancel</Text>
-        </Button>
+        <FormButton
+          primary
+          label={purpose === "account" ? (busy ? "Linking" : "Link") : busy ? "Pairing" : "Pair"}
+          disabled={busy}
+          onPress={() => void submit()}
+        />
+        <FormButton label="Cancel" disabled={busy} onPress={onCancel} />
       </View>
-    </View>
+    </FormCard>
   );
 }
 
@@ -1827,11 +1894,91 @@ function DestinationOrientations({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
   return (
     <View className="gap-1.5">
-      <Text className="text-xs text-muted-foreground">{label}</Text>
+      <Text
+        className={onPaper ? undefined : "text-xs text-muted-foreground"}
+        style={
+          onPaper
+            ? { color: paper.inkMuted, fontSize: 11, fontWeight: "600", letterSpacing: 0.8, textTransform: "uppercase" }
+            : undefined
+        }
+      >
+        {label}
+      </Text>
       {children}
     </View>
+  );
+}
+
+/** A form's card: the settings panel's white card on paper, the old card elsewhere. */
+function FormCard({ children }: { children: ReactNode }) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
+  if (!onPaper) {
+    return <View className="gap-3 rounded-2xl border border-border bg-card p-4">{children}</View>;
+  }
+  return (
+    <View
+      className="gap-3.5 p-4"
+      style={{
+        backgroundColor: paper.card,
+        borderRadius: 12,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: paper.line,
+      }}
+    >
+      {children}
+    </View>
+  );
+}
+
+/**
+ * A form's button. On the panel, Filmic's: the main action amber, the other a
+ * plain word. Elsewhere the app's own Button, as before.
+ */
+function FormButton({
+  label,
+  onPress,
+  disabled,
+  primary,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
+  if (!onPaper) {
+    return (
+      <Button
+        className={primary ? "flex-1" : undefined}
+        variant={primary ? "default" : "ghost"}
+        disabled={disabled}
+        onPress={onPress}
+      >
+        <Text>{label}</Text>
+      </Button>
+    );
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      className={`min-h-[44px] items-center justify-center rounded-xl px-4 active:opacity-60 ${
+        primary ? "flex-1" : ""
+      }`}
+      style={{
+        backgroundColor: primary ? paper.accent : "transparent",
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Text style={{ fontSize: 15, fontWeight: "600", color: primary ? paper.accentInk : paper.ink }}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 

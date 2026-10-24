@@ -133,10 +133,13 @@ export function useSettingsNav(): SettingsPanelNav {
 export function PanelFrame({
   title,
   action,
+  onBack,
   children,
 }: {
   title: string;
   action?: ReactNode;
+  /** Where back goes when it is not the previous panel page - a form's cancel. */
+  onBack?: () => void;
   children: ReactNode;
 }) {
   const panel = useContext(SettingsPanelContext);
@@ -149,7 +152,7 @@ export function PanelFrame({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back"
-          onPress={panel?.back}
+          onPress={onBack ?? panel?.back}
           hitSlop={8}
           className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
         >
