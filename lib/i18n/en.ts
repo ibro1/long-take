@@ -20,6 +20,8 @@ export const en = {
   "hud.paused": "Paused",
   "hud.connecting": "Connecting",
   "hud.offAir": "Off air",
+  "hud.rec": "REC",
+  "hud.ready": "Ready",
   "hud.goingLive": "Going live",
   "hud.fpsOut": "{fps} fps out",
   "hud.dropped": "· {count} dropped",
@@ -97,6 +99,7 @@ export const en = {
   // Where it is going.
   "destination.none": "No destination",
   "destination.choose": "Choose a destination",
+  "destination.recordOnly": "Record only",
   "destination.a11y": "Destination: {name}. Change it.",
 
   // Shared furniture.

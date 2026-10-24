@@ -51,10 +51,18 @@ export function rememberStudio(studio: string): void {
   setItem(STUDIO_KEY, studio);
 }
 
+/**
+ * The destination the operator chose, or null - and null means record only.
+ *
+ * Framevane is a recorder first: streaming is switched on by choosing a
+ * destination, and nothing chosen is a plain recorder. This used to fall back
+ * to the newest destination when none was chosen, which suited a streaming app
+ * and is wrong for this one - it sent the picture somewhere nobody picked.
+ */
 export function activeConnection(): Connection | null {
-  const all = listConnections();
   const id = getItem<string>(ACTIVE_KEY);
-  return all.find((c) => c.id === id) ?? all[0] ?? null;
+  if (!id) return null;
+  return listConnections().find((c) => c.id === id) ?? null;
 }
 
 /**
@@ -67,8 +75,10 @@ export function activeConnectionId(): string | null {
   return getItem<string>(ACTIVE_KEY);
 }
 
-export function setActiveConnection(id: string): void {
-  setItem(ACTIVE_KEY, id);
+/** Choose a destination, or null to record only. */
+export function setActiveConnection(id: string | null): void {
+  if (id === null) removeItem(ACTIVE_KEY);
+  else setItem(ACTIVE_KEY, id);
 }
 
 /**

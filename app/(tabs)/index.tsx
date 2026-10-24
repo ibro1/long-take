@@ -90,8 +90,6 @@ import {
   ShapeIcon,
   StatsIcon,
   StopIcon,
-  TorchIcon,
-  TorchOffIcon,
 } from "@/components/broadcast/icons";
 import { LevelMeter } from "@/components/broadcast/level-meter";
 import { LogPanel } from "@/components/broadcast/log-panel";
@@ -1079,15 +1077,31 @@ export default function BroadcastScreen() {
    * dead end, and "no destination" is a question with one obvious answer.
    */
 
+  /**
+   * Recording first: with no destination chosen Framevane is a recorder, and
+   * the big button records - Filmic's red disc, no words. Choosing a
+   * destination is what switches streaming on, and then it is GO LIVE.
+   */
   const primary = !connection
-    ? {
-        mode: "blocked" as const,
-        // Short enough to be drawn in the circle, so the eye and a screen
-        // reader are told the same thing.
-        label: t("primary.setUp"),
-        icon: GoLiveIcon,
-        onPress: () => router.push("/(tabs)/connections"),
-      }
+    ? recording
+      ? {
+          mode: "stop" as const,
+          label: t("control.stopRecording"),
+          icon: StopIcon,
+          onPress: () => {
+            tick();
+            void toggleRecording();
+          },
+        }
+      : {
+          mode: "record" as const,
+          label: t("control.record"),
+          icon: RecordIcon,
+          onPress: () => {
+            tick();
+            void toggleRecording();
+          },
+        }
     : counting !== null
       ? { mode: "stop" as const, label: t("primary.cancel"), icon: CloseIcon, onPress: cancelCountdown }
       : live
@@ -1254,7 +1268,7 @@ export default function BroadcastScreen() {
       hint: connection?.name ?? t("control.nowhere"),
       onPress: () => router.push("/(tabs)/connections"),
     },
-    ...QUICK_CONTROLS.filter((id) => !glass.includes(id)).map((id) => ({
+    ...QUICK_CONTROLS.filter((id) => !glass.includes(id) || id === "flip").map((id) => ({
       icon: CONTROL[id].icon,
       label: CONTROL[id].label,
       hint: CONTROL[id].hint,
@@ -1272,8 +1286,11 @@ export default function BroadcastScreen() {
 
 
   /** What the leading column's badge says - Filmic's PRO spot, given to the air. */
-  const badgeState: BroadcastState =
-    state === "reconnecting"
+  const badgeState: BroadcastState = !connection
+    ? recording
+      ? "live"
+      : "offAir"
+    : state === "reconnecting"
       ? "reconnecting"
       : paused
         ? "paused"
@@ -1282,8 +1299,11 @@ export default function BroadcastScreen() {
           : state === "connecting" || counting !== null
             ? "connecting"
             : "offAir";
-  const badgeLabel =
-    badgeState === "live"
+  const badgeLabel = !connection
+    ? recording
+      ? t("hud.rec")
+      : t("hud.ready")
+    : badgeState === "live"
       ? t("studio.live")
       : badgeState === "reconnecting"
         ? t("hud.reconnecting")
@@ -1299,9 +1319,14 @@ export default function BroadcastScreen() {
    * they are not repeated here; flip joins the torch on the left, as camera
    * things, and the rest go right.
    */
-  const cornerIds = onGlass.filter((id) => id !== "camera" && id !== "shape");
-  const leftCornerIds = cornerIds.filter((id) => id === "flip");
-  const rightCornerIds = cornerIds.filter((id) => id !== "flip");
+  // Flip and the torch are off the glass (owner, 25 Oct 2026): the lens is
+  // chosen in Settings - Hardware, the torch is there too, and flip stays in
+  // the drawer.
+  const cornerIds = onGlass.filter((id) => id !== "camera" && id !== "shape" && id !== "flip");
+  // With torch and flip gone the bottom-left corner is empty; the operator's
+  // controls all sit bottom right.
+  const leftCornerIds: QuickControl[] = [];
+  const rightCornerIds = cornerIds;
   const cornerDisc = (id: QuickControl) => {
     const control = CONTROL[id];
     return (
@@ -1848,9 +1873,9 @@ export default function BroadcastScreen() {
         numberOfLines={1}
         maxFontSizeMultiplier={HUD_TEXT}
         style={connection ? bidi(connection.name) : textDir()}
-        className={`shrink text-xs ${connection ? "text-filmic-ink" : "text-filmic-accent"}`}
+        className="shrink text-xs text-filmic-ink"
       >
-        {connection?.name ?? t("destination.choose")}
+        {connection?.name ?? t("destination.recordOnly")}
       </Text>
     </Pressable>
   );
@@ -2361,15 +2386,6 @@ export default function BroadcastScreen() {
                   pointerEvents="box-none"
                   className="absolute bottom-3 left-3 flex-row items-end gap-2.5"
                 >
-                  {capabilities?.torch ? (
-                    <GlassDisc
-                      icon={torch ? TorchIcon : TorchOffIcon}
-                      label={torch ? t("control.torchOn") : t("control.torchOff")}
-                      active={torch}
-                      tone="accent"
-                      onPress={toggleTorch}
-                    />
-                  ) : null}
                   {ladder.minimal ? null : leftCornerIds.map(cornerDisc)}
                 </View>
 
@@ -2507,16 +2523,6 @@ export default function BroadcastScreen() {
             <View pointerEvents="box-none" className="gap-3 px-5 pb-3 pt-3">
               {/* The operator's quick controls, a size down, above the shutter row. */}
               <View pointerEvents="box-none" className="flex-row items-center justify-center gap-3">
-                {capabilities?.torch ? (
-                  <GlassDisc
-                    icon={torch ? TorchIcon : TorchOffIcon}
-                    size={44}
-                    label={torch ? t("control.torchOn") : t("control.torchOff")}
-                    active={torch}
-                    tone="accent"
-                    onPress={toggleTorch}
-                  />
-                ) : null}
                 {ladder.minimal ? null : leftCornerIds.map(cornerDisc)}
                 {ladder.minimal ? null : rightCornerIds.map(cornerDisc)}
                 <GlassDisc

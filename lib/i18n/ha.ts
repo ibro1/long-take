@@ -19,6 +19,8 @@ export const ha: Record<StringKey, string> = {
   "hud.paused": "An dakata",
   "hud.connecting": "Ana haɗawa",
   "hud.offAir": "Ba a iska",
+  "hud.rec": "REC",
+  "hud.ready": "A shirye",
   "hud.goingLive": "Ana farawa",
   "hud.fpsOut": "{fps} fps na fita",
   "hud.dropped": "· {count} sun faɗi",
@@ -96,6 +98,7 @@ export const ha: Record<StringKey, string> = {
   // Where it is going.
   "destination.none": "Babu wurin aikawa",
   "destination.choose": "Zaɓi wurin aikawa",
+  "destination.recordOnly": "Rikodi kawai",
   "destination.a11y": "Wurin aikawa: {name}. Canza shi.",
 
   // Shared furniture.

@@ -576,7 +576,8 @@ export function ShutterButton({
   onPress,
 }: {
   label: string;
-  mode: "start" | "stop" | "blocked";
+  /** "record": the recorder's shutter - a red disc with no words, as Filmic. */
+  mode: "start" | "stop" | "blocked" | "record";
   compact?: boolean;
   onPress: () => void;
 }) {
@@ -599,14 +600,16 @@ export function ShutterButton({
             mode === "blocked" ? "bg-filmic-surface/80" : "bg-filmic-alert"
           }`}
         >
-          <Text
-            className={`text-center font-bold text-filmic-ink ${compact ? "text-[10px]" : "text-xs"}`}
-            numberOfLines={2}
-            maxFontSizeMultiplier={HUD_TEXT}
-          >
-            {/* One word to a line: the circle is too narrow for two side by side. */}
-            {label.toUpperCase().replace(" ", "\n")}
-          </Text>
+          {mode === "record" ? null : (
+            <Text
+              className={`text-center font-bold text-filmic-ink ${compact ? "text-[10px]" : "text-xs"}`}
+              numberOfLines={2}
+              maxFontSizeMultiplier={HUD_TEXT}
+            >
+              {/* One word to a line: the circle is too narrow for two side by side. */}
+              {label.toUpperCase().replace(" ", "\n")}
+            </Text>
+          )}
         </View>
       )}
     </Pressable>

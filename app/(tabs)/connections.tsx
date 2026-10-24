@@ -547,12 +547,34 @@ export default function ConnectionsScreen() {
           </View>
         ) : null}
 
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={activeId === null ? "Record only, chosen" : "Record only, without streaming"}
+          accessibilityState={{ selected: activeId === null }}
+          onPress={() => {
+            setActiveConnection(null);
+            setActiveId(null);
+            router.push("/(tabs)");
+          }}
+          className={`gap-1 rounded-2xl border bg-card p-4 ${
+            activeId === null ? "border-foreground" : "border-border"
+          }`}
+        >
+          <Text className="font-semibold">Record only</Text>
+          <Text className="text-xs text-muted-foreground">
+            {activeId === null
+              ? "Recording to the phone, nothing streamed"
+              : "Stop streaming and just record to the phone"}
+          </Text>
+        </Pressable>
+
         {connections.map((connection) => {
           // Falling back to the newest is what the broadcast does when nothing
           // has been chosen, so the card says so in those words rather than
           // claiming someone picked it.
           const chosen = connection.id === activeId;
-          const fallback = activeId === null && connection.id === connections[0]?.id;
+          // Nothing chosen means record only now; no card is "sending" by default.
+          const fallback = false;
           return (
             <Pressable
               key={connection.id}
@@ -675,15 +697,20 @@ export default function ConnectionsScreen() {
         >
           <Group
             title="Send to"
-            note={
-              connections.length === 0
-                ? "Nothing here yet. Link this phone to your studio below, or add one stream with its pairing code."
-                : undefined
-            }
+            note="Framevane records on its own. Choose a destination to stream as well."
           >
+            <RecordOnlyRow
+              chosen={activeId === null}
+              onChoose={() => {
+                setActiveConnection(null);
+                setActiveId(null);
+                panel.close();
+              }}
+            />
             {connections.map((connection) => {
               const chosen = connection.id === activeId;
-              const fallback = activeId === null && connection.id === connections[0]?.id;
+              // Nothing chosen means record only now; no card is "sending" by default.
+              const fallback = false;
               return (
                 <DestinationRow
                   key={connection.id}
@@ -2048,6 +2075,27 @@ function DestinationRow({
           <Text style={{ color: "#C0392B", fontSize: 14, fontWeight: "500" }}>Remove</Text>
         </Pressable>
       ) : null}
+    </Pressable>
+  );
+}
+
+/** The panel's first choice: no destination, Framevane as a plain recorder. */
+function RecordOnlyRow({ chosen, onChoose }: { chosen: boolean; onChoose: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={chosen ? "Record only, chosen" : "Record only, without streaming"}
+      accessibilityState={{ selected: chosen }}
+      onPress={onChoose}
+      className="min-h-[56px] flex-row items-center gap-3 px-4 py-2.5 active:opacity-60"
+    >
+      <View className="w-5 items-center">
+        {chosen ? <Check size={18} color={paper.accent} strokeWidth={3} /> : null}
+      </View>
+      <View className="flex-1 gap-0.5">
+        <Text style={{ color: paper.ink, fontSize: 15, fontWeight: "600" }}>Record only</Text>
+        <Text style={{ color: paper.inkMuted, fontSize: 12 }}>To the phone, nothing streamed</Text>
+      </View>
     </Pressable>
   );
 }

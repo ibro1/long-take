@@ -19,6 +19,8 @@ export const ar: Record<StringKey, string> = {
   "hud.paused": "إيقاف مؤقت",
   "hud.connecting": "جارٍ الاتصال",
   "hud.offAir": "خارج البث",
+  "hud.rec": "تسجيل",
+  "hud.ready": "جاهز",
   "hud.goingLive": "بدء البث",
   "hud.fpsOut": "{fps} fps صادرة",
   "hud.dropped": "· {count} مفقودة",
@@ -96,6 +98,7 @@ export const ar: Record<StringKey, string> = {
   // Where it is going.
   "destination.none": "لا وجهة",
   "destination.choose": "اختر وجهة",
+  "destination.recordOnly": "تسجيل فقط",
   "destination.a11y": "الوجهة: {name}. غيّرها.",
 
   // Shared furniture.
