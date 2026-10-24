@@ -33,7 +33,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BackIcon } from "@/components/broadcast/icons";
-import { PanelFrame, SettingsPanelContext } from "@/components/settings/chrome";
+import {
+  Group,
+  NavRow,
+  PanelFrame,
+  paper,
+  ReadoutRow,
+  SettingsPanelContext,
+} from "@/components/settings/chrome";
+import { Check } from "lucide-react-native";
 import { Text } from "@/components/ui/text";
 import {
   type AccountLink,
@@ -353,6 +361,44 @@ export default function ConnectionsScreen() {
     openScanner();
   };
 
+  // Shared by the full-screen layout and the settings panel's.
+  const pairingEl = claiming ? (
+          <CodePairing
+            purpose={claimFor}
+            onCancel={() => setClaiming(false)}
+            onPaired={(result) => {
+              setClaiming(false);
+              void accept(result);
+            }}
+          />
+        ) : null;
+  const editorEl = draft ? (
+          <Editor
+            connection={draft}
+            onChange={setDraft}
+            onCancel={() => setDraft(null)}
+            onSave={() => {
+              // A Framevane card a sync has removed meanwhile - its stream
+              // deleted on the dashboard, or the link undone - is not brought
+              // back by saving an old copy of it.
+              if (draft.controlToken && !listConnections().some((c) => c.id === draft.id)) {
+                setDraft(null);
+                refresh();
+                return;
+              }
+              // A destination with no name is saved as its host rather than
+              // as an empty card, which reads as a bug.
+              const named = draft.name.trim()
+                ? draft
+                : { ...draft, name: nameFromServer(draft.server) };
+              saveConnection(named);
+              setActiveConnection(named.id);
+              setDraft(null);
+              refresh();
+            }}
+          />
+        ) : null;
+
   const content = (
       <ScrollView
         contentContainerClassName="gap-4 p-4"
@@ -481,43 +527,8 @@ export default function ConnectionsScreen() {
           </Text>
         </Pressable>
 
-        {claiming ? (
-          <CodePairing
-            purpose={claimFor}
-            onCancel={() => setClaiming(false)}
-            onPaired={(result) => {
-              setClaiming(false);
-              void accept(result);
-            }}
-          />
-        ) : null}
-
-        {draft ? (
-          <Editor
-            connection={draft}
-            onChange={setDraft}
-            onCancel={() => setDraft(null)}
-            onSave={() => {
-              // A Framevane card a sync has removed meanwhile - its stream
-              // deleted on the dashboard, or the link undone - is not brought
-              // back by saving an old copy of it.
-              if (draft.controlToken && !listConnections().some((c) => c.id === draft.id)) {
-                setDraft(null);
-                refresh();
-                return;
-              }
-              // A destination with no name is saved as its host rather than
-              // as an empty card, which reads as a bug.
-              const named = draft.name.trim()
-                ? draft
-                : { ...draft, name: nameFromServer(draft.server) };
-              saveConnection(named);
-              setActiveConnection(named.id);
-              setDraft(null);
-              refresh();
-            }}
-          />
-        ) : null}
+        {pairingEl}
+        {editorEl}
 
         {connections.length === 0 && !draft ? (
           <View className="rounded-2xl border border-dashed border-border p-4">
@@ -606,9 +617,115 @@ export default function ConnectionsScreen() {
       </ScrollView>
   );
 
-  // In the settings panel the panel's frame carries the title and the way
-  // back; as a screen of its own it keeps its full-screen frame.
-  if (panel) return <PanelFrame title="Destinations">{content}</PanelFrame>;
+  // In the settings panel: Filmic's form - flat rows on paper, the list you
+  // came for first, adding and the account below it. Same actions as the
+  // full-screen layout, which keeps its own frame.
+  if (panel) {
+    return (
+      <PanelFrame title="Destinations">
+        <ScrollView
+          className="flex-1"
+          contentContainerClassName="gap-4 p-3 pb-6"
+          refreshControl={
+            <RefreshControl
+              refreshing={syncing}
+              onRefresh={() => {
+                void sync();
+                void refreshStudioNames();
+              }}
+            />
+          }
+        >
+          {editorEl}
+          {pairingEl}
+          <Group
+            title="Send to"
+            note={
+              connections.length === 0
+                ? "Nothing here yet. Link this phone to your studio below, or add one stream with its pairing code."
+                : undefined
+            }
+          >
+            {connections.map((connection) => {
+              const chosen = connection.id === activeId;
+              const fallback = activeId === null && connection.id === connections[0]?.id;
+              return (
+                <DestinationRow
+                  key={connection.id}
+                  connection={connection}
+                  codec={codec}
+                  sending={chosen || fallback}
+                  onChoose={() => {
+                    setActiveConnection(connection.id);
+                    setActiveId(connection.id);
+                    panel.close();
+                  }}
+                  onEdit={() => setDraft(connection)}
+                  onRemove={isAccountConnection(connection) ? undefined : () => remove(connection)}
+                />
+              );
+            })}
+          </Group>
+          <Group title="Add a destination">
+            <NavRow
+              label="Scan a pairing code"
+              detail="Opens the camera, outside this panel"
+              onPress={() => void scan()}
+            />
+            <NavRow
+              label="Enter a pairing code"
+              onPress={() => {
+                setDraft(null);
+                setClaimFor("stream");
+                setClaiming((open) => !open || claimFor !== "stream");
+              }}
+            />
+            <NavRow
+              label="Type a server and key"
+              detail="No overlays or title without pairing"
+              onPress={() => {
+                setClaiming(false);
+                setDraft(blankConnection());
+              }}
+            />
+          </Group>
+          <Group title="Studio account" footer={accountNote ? <Note>{accountNote}</Note> : undefined}>
+            {link
+              ? [
+                  <ReadoutRow key="host" label="Linked to" value={accountHost(link)} />,
+                  <NavRow
+                    key="refresh"
+                    label={syncing ? "Refreshing" : "Refresh"}
+                    detail="Streams added or renamed on the dashboard"
+                    onPress={() => {
+                      void sync();
+                      void refreshStudioNames();
+                    }}
+                  />,
+                  <NavRow key="unlink" label="Unlink this phone" onPress={unlink} />,
+                ]
+              : [
+                  <NavRow
+                    key="scan"
+                    label="Scan to link this phone"
+                    detail={'On the dashboard: Streams, then "Link a phone"'}
+                    onPress={() => void scan()}
+                  />,
+                  <NavRow
+                    key="code"
+                    label="Link with a code"
+                    onPress={() => {
+                      setDraft(null);
+                      setClaimFor("account");
+                      setClaiming((open) => !open || claimFor !== "account");
+                    }}
+                  />,
+                ]}
+          </Group>
+        </ScrollView>
+      </PanelFrame>
+    );
+  }
 
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top"]}>
@@ -1726,5 +1843,64 @@ function Note({ children }: { children: ReactNode }) {
   const onPaper = useContext(SettingsPanelContext) !== null;
   return (
     <Text className={`text-xs ${onPaper ? "text-amber-700" : "text-amber-400"}`}>{children}</Text>
+  );
+}
+
+/**
+ * One destination as a Filmic row on the settings panel: tap to send here,
+ * with what it sends under the name and a check on the one in use.
+ */
+function DestinationRow({
+  connection,
+  codec,
+  sending,
+  onChoose,
+  onEdit,
+  onRemove,
+}: {
+  connection: Connection;
+  codec: string;
+  sending: boolean;
+  onChoose: () => void;
+  onEdit: () => void;
+  onRemove?: () => void;
+}) {
+  const detail = [
+    `${connection.height}p ${connection.fps}`,
+    formatKbps(connection.videoBitrate),
+    codec === "h265" ? "H.265" : "H.264",
+    connection.protocol.toUpperCase(),
+  ].join(" · ");
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={sending ? `${connection.name}, sending here` : `Send to ${connection.name}`}
+      accessibilityState={{ selected: sending }}
+      onPress={onChoose}
+      className="min-h-[56px] flex-row items-center gap-3 px-4 py-2.5 active:opacity-60"
+    >
+      <View className="w-5 items-center">
+        {sending ? <Check size={18} color={paper.accent} strokeWidth={3} /> : null}
+      </View>
+      <View className="flex-1 gap-0.5">
+        <Text
+          numberOfLines={1}
+          style={[{ color: paper.ink, fontSize: 15, fontWeight: "600" }, bidi(connection.name)]}
+        >
+          {connection.name}
+        </Text>
+        <Text numberOfLines={1} style={{ color: paper.inkMuted, fontSize: 12 }}>
+          {detail}
+        </Text>
+      </View>
+      <Pressable accessibilityRole="button" onPress={onEdit} hitSlop={8} className="px-2 py-1 active:opacity-60">
+        <Text style={{ color: paper.ink, fontSize: 14, fontWeight: "500" }}>Edit</Text>
+      </Pressable>
+      {onRemove ? (
+        <Pressable accessibilityRole="button" onPress={onRemove} hitSlop={8} className="px-2 py-1 active:opacity-60">
+          <Text style={{ color: "#C0392B", fontSize: 14, fontWeight: "500" }}>Remove</Text>
+        </Pressable>
+      ) : null}
+    </Pressable>
   );
 }
