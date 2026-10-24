@@ -43,6 +43,7 @@ internal fun BroadcasterView.startRecording(): String {
    * makes that start a no-op that only swaps the sink.
    */
   monitorAudio(true)
+  clearMonitorForAir()
 
   val dir = recordingsDir() ?: throw RecordingUnavailableException()
   recordingBase = "framevane-${stamp()}"

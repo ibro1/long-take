@@ -258,6 +258,7 @@ class BroadcasterModule : Module() {
          */
         v.monitorAudio(true)
 
+        v.clearMonitorForAir()
         runCatching { v.stream.startStream(v.srtDestination(url)) }.onFailure {
           /**
            * The library sets isStreaming before it opens anything and does not

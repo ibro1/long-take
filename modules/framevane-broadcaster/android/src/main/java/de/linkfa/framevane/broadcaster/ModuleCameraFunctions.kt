@@ -66,4 +66,8 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
   AsyncFunction("setTorch") { on: Boolean -> view().setTorch(on) }
 
   Function("isTorchOn") { BroadcasterView.current?.camera?.isLanternEnabled() ?: false }
+
+  AsyncFunction("setMonitor") { mode: String -> view().setMonitor(mode) }
+
+  Function("monitorMode") { BroadcasterView.current?.monitorMode ?: "off" }
 }

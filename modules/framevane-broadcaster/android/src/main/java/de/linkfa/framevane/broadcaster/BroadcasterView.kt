@@ -24,6 +24,8 @@ import com.pedro.encoder.input.audio.GetMicrophoneData
 import com.pedro.encoder.input.sources.OrientationConfig
 import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
+import com.pedro.encoder.input.gl.render.filters.BaseFilterRender
+import com.pedro.encoder.input.gl.render.filters.EdgeDetectionFilterRender
 import com.pedro.encoder.input.sources.video.Camera2Source
 import com.pedro.encoder.input.video.CameraCallbacks
 import com.pedro.encoder.input.video.CameraHelper
@@ -1494,6 +1496,51 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
   fun isVideoMuted(): Boolean =
     runCatching { stream.getGlInterface().isVideoMuted() }.getOrNull() ?: false
+
+  // --- Display-only monitoring (focus peaking) -------------------------
+  //
+  // A monitoring aid is a RootEncoder GL filter over the preview. RootEncoder
+  // applies filters to the encoder surface too, so one left on would burn into
+  // the recording and the stream; it is therefore cleared the moment the
+  // operator goes on air (clearMonitorForAir, from the go-live and record
+  // paths). Peaking reuses the library's own edge detector - red edges drawn
+  // over the live picture, a negative background meaning "keep the original".
+
+  private var monitorFilter: BaseFilterRender? = null
+
+  /** The monitoring mode actually applied: "off" or "peaking". */
+  var monitorMode: String = "off"
+    private set
+
+  /** Apply a monitoring aid over the preview, or "off" to clear it. */
+  fun setMonitor(mode: String) {
+    val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return
+    runCatching {
+      gl.clearFilters()
+      monitorFilter = null
+      when (mode) {
+        "peaking" -> {
+          // performanceMode=false is the Sobel path, the only one whose colour
+          // setters work; a negative background keeps the live picture.
+          val f = EdgeDetectionFilterRender(false)
+          f.setEdgeRGBColor(255, 48, 48)
+          f.setBackgroundRGBColor(-1, -1, -1)
+          gl.setFilter(f)
+          monitorFilter = f
+        }
+      }
+      monitorMode = if (monitorFilter != null) mode else "off"
+      log(LOG_INFO, "monitor: $monitorMode")
+    }.onFailure { log(LOG_WARN, "monitor $mode failed: ${it.message}") }
+  }
+
+  /**
+   * Clear any monitoring aid before going on air, so it is never encoded into
+   * the stream or the recording. Called from the go-live and record paths.
+   */
+  fun clearMonitorForAir() {
+    if (monitorFilter != null) setMonitor("off")
+  }
 
   // --- Carrying on in the background ------------------------------------
 
