@@ -329,8 +329,11 @@ export function setFocusDistance(dioptres: number): Promise<void> {
 
 /**
  * A display-only viewfinder aid over the preview: "peaking" highlights the
- * in-focus edges in red, "off" clears it. It is never encoded - going live or
- * recording clears it on the native side.
+ * in-focus edges in red, "zebra" stripes bright highlights, "falsecolor" maps
+ * exposure to a palette, "clipping" paints any pixel with a blown colour
+ * channel solid red, "off" clears it. It is never encoded - going live or
+ * recording clears it on the native side, and Android refuses to apply one
+ * while live or recording.
  */
 export function setMonitor(mode: MonitorMode): Promise<void> {
   return native.setMonitor(mode);

@@ -473,11 +473,25 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   @Volatile
   private var lastLevelEmit = 0L
 
-  private val levelMeter = MicrophoneLevel { peak ->
+  private val levelMeter = MicrophoneLevel(
+    /**
+     * Read from the source rather than from [audioStereo], because the source's
+     * flag is what the running recorder was actually built from: the setting
+     * can change while the microphone is up, and only reaches the source at its
+     * next start or prepareAudio - which is also when the buffer layout
+     * changes. A plain final getter, so asking it on every buffer is free.
+     */
+    isStereo = { microphone.isStereo },
+  ) { peakL, peakR ->
     // Every buffer, unthrottled: the native meter wants the clip it would
     // otherwise miss between two events, and publishing is a loop over a
-    // copy-on-write set with nothing to wait on.
-    LevelBus.publish(peak)
+    // copy-on-write set with nothing to wait on. Both channels go to the
+    // native meter, which draws one column each.
+    LevelBus.publish(peakL, peakR)
+    // The `onLevel` event keeps its single number - the louder channel - so
+    // nothing in JavaScript has to learn about channels. Mono's right is
+    // LevelBus.MONO, below any real peak, so this is just peakL there.
+    val peak = if (peakR > peakL) peakR else peakL
     val interval = levelEventIntervalMs
     if (peak > peakSinceEmit) peakSinceEmit = peak
     val now = System.currentTimeMillis()
@@ -1536,7 +1550,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   fun isVideoMuted(): Boolean =
     runCatching { stream.getGlInterface().isVideoMuted() }.getOrNull() ?: false
 
-  // --- Display-only monitoring (peaking / zebra / false colour) --------
+  // --- Display-only monitoring (peaking / zebra / false colour / clipping)
   //
   // A monitoring aid is a RootEncoder GL filter over the preview. RootEncoder
   // applies filters to the encoder surface too, so one left on would burn into
@@ -1544,11 +1558,12 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   // operator goes on air (clearMonitorForAir, from the go-live and record
   // paths). The aids are our own BaseFilterRender subclasses (MonitoringFilters.kt):
   // peaking is a thresholded Sobel outline, zebra marks blown highlights, false
-  // colour maps luma to an exposure palette.
+  // colour maps luma to an exposure palette, clipping paints red wherever any
+  // single colour channel has hit the ceiling.
 
   private var monitorFilter: BaseFilterRender? = null
 
-  /** The monitoring mode actually applied: "off", "peaking", "zebra" or "falsecolor". */
+  /** The monitoring mode actually applied: "off", "peaking", "zebra", "falsecolor" or "clipping". */
   var monitorMode: String = "off"
     private set
 
@@ -1582,6 +1597,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         "zebra" -> ZebraFilterRender()
         // Luma -> IRE exposure palette.
         "falsecolor" -> FalseColorFilterRender()
+        // Solid red wherever any one channel has blown; see [ClippingFilterRender]
+        // for why that is a different question from the zebras' luma test.
+        "clipping" -> ClippingFilterRender()
         else -> null
       }
       if (f != null) {

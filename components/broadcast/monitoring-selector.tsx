@@ -4,7 +4,7 @@ import { Text } from "@/components/ui/text";
 import { filmic } from "@/lib/theme/filmic";
 import type { MonitorMode } from "@/modules/framevane-broadcaster";
 
-import { FalseColorIcon, MonitorOffIcon, PeakingIcon, ZebraIcon } from "./icons";
+import { ClippingIcon, FalseColorIcon, MonitorOffIcon, PeakingIcon, ZebraIcon } from "./icons";
 
 /**
  * The display-only monitoring aids, as a Filmic-style icon scope row over the
@@ -24,6 +24,7 @@ const MODES: {
   { mode: "peaking", label: "Peaking", Icon: PeakingIcon },
   { mode: "zebra", label: "Zebra", Icon: ZebraIcon },
   { mode: "falsecolor", label: "False colour", Icon: FalseColorIcon },
+  { mode: "clipping", label: "Clipping", Icon: ClippingIcon },
 ];
 
 export function MonitoringSelector({

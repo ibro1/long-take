@@ -38,9 +38,21 @@ import kotlin.math.sqrt
  * audio thread needs - it must never wait on the UI thread.
  */
 internal object LevelBus {
+  /**
+   * The right-channel value of a mono buffer. Negative, so it is below every
+   * real peak: a listener that only wants the louder side can take the max of
+   * the two and get the mono peak back without asking which it was.
+   */
+  const val MONO = -1f
+
   fun interface Listener {
-    /** Called on the audio thread. Do the least possible and hand off. */
-    fun onPeak(peak: Float)
+    /**
+     * Called on the audio thread. Do the least possible and hand off.
+     *
+     * Two floats rather than an array, so a publish dozens of times a second
+     * allocates nothing. [right] is [MONO] when the microphone is mono.
+     */
+    fun onPeak(left: Float, right: Float)
   }
 
   private val listeners = CopyOnWriteArraySet<Listener>()
@@ -53,8 +65,8 @@ internal object LevelBus {
     listeners.remove(listener)
   }
 
-  /** 0-100, the same scale `onLevel` reports. */
-  fun publish(peak: Float) {
+  /** 0-100 per channel, the same scale `onLevel` reports; [right] is [MONO] for mono. */
+  fun publish(left: Float, right: Float) {
     // The empty case is the common one off the broadcast screen, and the
     // iterator is worth skipping there.
     if (listeners.isEmpty()) return
@@ -62,7 +74,7 @@ internal object LevelBus {
       // A listener's failure must not reach the audio thread: an exception
       // there has nothing above it and takes the process, which is the
       // AmplitudeEffect crash this app has already had once.
-      runCatching { listener.onPeak(peak) }
+      runCatching { listener.onPeak(left, right) }
     }
   }
 }
@@ -84,6 +96,16 @@ internal object LevelBus {
  *   buffer reaches full scale. Clipping lasts a few milliseconds and damages
  *   the audio for good, and a segment that flickers red for one frame is a
  *   segment nobody sees.
+ *
+ * A stereo microphone gets two columns side by side, left channel on the
+ * left, each with its own hold line and clip cap, splitting the width the
+ * single column had. Two because a stereo pair fails one side at a time - a
+ * lapel lead half out of its socket, a mixer feeding one channel - and a
+ * single column of the louder side reads perfectly healthy while viewers hear
+ * sound in one ear. A mono microphone draws exactly the single column it
+ * always did. The layout follows the buffers, not a prop: the audio thread
+ * says which it is with every peak, so the meter changes shape the moment the
+ * microphone does and JavaScript does not have to know.
  *
  * Sized entirely from layout: JavaScript gives it a width and a height and the
  * segments are divided out of whatever that turns out to be.
@@ -140,12 +162,21 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
   // --- Fed from the audio thread ----------------------------------------
 
   /**
-   * The loudest peak since the last frame, as float bits, or [NO_SAMPLE].
+   * The loudest peak since the last frame, per channel, as float bits, or
+   * [NO_SAMPLE]. Index 0 is left (or the only channel), 1 is right.
    *
    * An atomic max rather than a lock: the audio thread may only ever do a
    * compare-and-set here, never wait for the UI thread to finish drawing.
    */
-  private val pendingPeak = AtomicInteger(NO_SAMPLE)
+  private val pendingPeaks = arrayOf(AtomicInteger(NO_SAMPLE), AtomicInteger(NO_SAMPLE))
+
+  /**
+   * Whether the last buffer was stereo, as the audio thread last said. Read by
+   * the frame loop to decide how many columns to draw; a lone volatile is
+   * enough because it only ever moves between two whole values.
+   */
+  @Volatile
+  private var stereoSeen = false
 
   /** When the last buffer arrived, so a microphone that stops can be told apart. */
   @Volatile
@@ -154,36 +185,53 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
   /** Whether a frame is scheduled. One at a time, so frames cannot pile up. */
   private val ticking = AtomicBoolean(false)
 
-  private val listener = LevelBus.Listener { peak ->
+  private val listener = LevelBus.Listener { peakL, peakR ->
     // Never touches a View from here - this is the audio thread.
-    while (true) {
-      val current = pendingPeak.get()
-      if (current != NO_SAMPLE && Float.fromBits(current) >= peak) break
-      if (pendingPeak.compareAndSet(current, peak.toRawBits())) break
-    }
+    val stereo = peakR >= 0f
+    raise(pendingPeaks[0], peakL)
+    if (stereo) raise(pendingPeaks[1], peakR)
+    stereoSeen = stereo
     lastSampleAt = SystemClock.uptimeMillis()
     // The first sample after a quiet spell wakes the frame loop; every other
     // one just updates the max above and lets the running loop pick it up.
     if (ticking.compareAndSet(false, true)) post(tick)
   }
 
+  /** Lift [slot] to [peak] if it is lower. Lock-free; safe on the audio thread. */
+  private fun raise(slot: AtomicInteger, peak: Float) {
+    while (true) {
+      val current = slot.get()
+      if (current != NO_SAMPLE && Float.fromBits(current) >= peak) return
+      if (slot.compareAndSet(current, peak.toRawBits())) return
+    }
+  }
+
   // --- State, read and written on the UI thread only --------------------
 
-  /** The displayed level, 0-1, after the meter curve and the release. */
-  private var level = 0f
+  //
+  // Everything per channel is a two-slot array, index 0 left (or mono), 1
+  // right, so one column's code serves both without a second copy of it and
+  // without allocating per frame. Slot 1 is simply idle while mono.
+
+  /** How many columns are drawn: 1 for mono, 2 for stereo. */
+  private var channels = 1
+
+  /** The displayed level per channel, 0-1, after the meter curve and the release. */
+  private val level = FloatArray(2)
   private var levelAt = 0L
 
-  /** The peak-hold mark: where it was set and when. */
-  private var holdLevel = 0f
-  private var holdAt = 0L
+  /** The peak-hold mark per channel: where it was set and when. */
+  private val holdLevel = FloatArray(2)
+  private val holdAt = LongArray(2)
 
-  /** When the clip cap was last lit, or 0. */
-  private var clipAt = 0L
+  /** When each channel's clip cap was last lit, or 0. */
+  private val clipAt = LongArray(2)
 
   /** What the last drawn frame showed, so an unchanged frame is never redrawn. */
-  private var drawnLit = -1
-  private var drawnHoldPx = -1
-  private var drawnClip = false
+  private var drawnChannels = 1
+  private val drawnLit = intArrayOf(-1, -1)
+  private val drawnHoldPx = intArrayOf(-1, -1)
+  private val drawnClip = BooleanArray(2)
 
   /**
    * One frame of the meter: fold in what arrived, age the hold and the clip
@@ -197,44 +245,36 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
   private val tick: Runnable = object : Runnable {
     override fun run() {
       val now = SystemClock.uptimeMillis()
-      val bits = pendingPeak.getAndSet(NO_SAMPLE)
       val dt = if (levelAt == 0L) 0L else now - levelAt
       levelAt = now
 
       /**
-       * The release: the level falls no faster than [RELEASE_PER_MS], so a
-       * 33 ms frame that happened to catch only a quiet buffer does not snap
-       * the column to the floor and back. Rising is instant, as on any meter.
-       *
-       * It is also what happens when the microphone stops: no peaks arrive,
-       * nothing holds the level up, and the column falls to empty. The last
-       * level is never left standing - a column frozen at speaking height is
-       * the exact lie this view exists to stop telling.
+       * The microphone changed shape - mono to stereo or back. The right
+       * column's state is cleared either way: arriving, it starts from empty
+       * rather than from whatever a stereo spell long ago left; leaving, it
+       * must not linger in a slot that is no longer drawn and then reappear.
        */
-      var next = (level - dt * RELEASE_PER_MS).coerceAtLeast(0f)
-      if (bits != NO_SAMPLE) {
-        val peak = Float.fromBits(bits)
-        // The same curve the JavaScript meter used, so the column means what
-        // it meant: speech sits low on a linear scale, and the square root
-        // puts a normal speaking voice in the middle where movement is seen.
-        val curved = min(1f, sqrt((peak / 100f).coerceAtLeast(0f)))
-        if (curved > next) next = curved
-        if (peak >= CLIP_PEAK) clipAt = now
+      val nowChannels = if (stereoSeen) 2 else 1
+      if (nowChannels != channels) {
+        channels = nowChannels
+        resetChannel(1)
       }
-      level = next
+      /**
+       * While mono, the right slot is emptied on every frame, not only at the
+       * switch. A stereo buffer's right peak can land just before a mono
+       * buffer flips [stereoSeen] back, after the switch has been seen; left
+       * there, nothing would ever consume it, and the stop re-check below
+       * would keep re-posting a frame that never clears it.
+       */
+      if (channels == 1) pendingPeaks[1].set(NO_SAMPLE)
 
-      // The hold mark rides up with the level and then sinks to nothing over
-      // HOLD_DECAY_MS - unless the level comes back up to meet it first.
-      val heldNow = heldLevel(now)
-      if (level >= heldNow) {
-        holdLevel = level
-        holdAt = now
+      var moving = now - lastSampleAt <= STALE_MS
+      for (c in 0 until channels) {
+        if (advance(c, pendingPeaks[c].getAndSet(NO_SAMPLE), now, dt)) moving = true
       }
 
       invalidateIfChanged(now)
 
-      val clipLit = clipAt != 0L && now - clipAt < CLIP_HOLD_MS
-      val moving = now - lastSampleAt <= STALE_MS || level > 0f || heldLevel(now) > 0f || clipLit
       if (moving && isAttachedToWindow) {
         postDelayed(this, FRAME_MS)
         return
@@ -243,32 +283,90 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
       // between the decision and the clear still gets a frame instead of
       // waiting for the next buffer to wake the loop.
       ticking.set(false)
-      if (pendingPeak.get() != NO_SAMPLE && isAttachedToWindow && ticking.compareAndSet(false, true)) {
+      val pending = pendingPeaks[0].get() != NO_SAMPLE ||
+        (stereoSeen && pendingPeaks[1].get() != NO_SAMPLE)
+      if (pending && isAttachedToWindow && ticking.compareAndSet(false, true)) {
         post(this)
       }
     }
   }
 
-  /** The hold mark's height right now, 0-1, after its decay. */
-  private fun heldLevel(now: Long): Float {
-    if (holdAt == 0L) return 0f
-    val age = now - holdAt
+  /**
+   * One channel's share of a frame: fold in its peak, age its hold and clip
+   * cap. Returns whether anything on that column is still moving.
+   */
+  private fun advance(c: Int, bits: Int, now: Long, dt: Long): Boolean {
+    /**
+     * The release: the level falls no faster than [RELEASE_PER_MS], so a
+     * 33 ms frame that happened to catch only a quiet buffer does not snap
+     * the column to the floor and back. Rising is instant, as on any meter.
+     *
+     * It is also what happens when the microphone stops: no peaks arrive,
+     * nothing holds the level up, and the column falls to empty. The last
+     * level is never left standing - a column frozen at speaking height is
+     * the exact lie this view exists to stop telling.
+     */
+    var next = (level[c] - dt * RELEASE_PER_MS).coerceAtLeast(0f)
+    if (bits != NO_SAMPLE) {
+      val peak = Float.fromBits(bits)
+      // The same curve the JavaScript meter used, so the column means what
+      // it meant: speech sits low on a linear scale, and the square root
+      // puts a normal speaking voice in the middle where movement is seen.
+      val curved = min(1f, sqrt((peak / 100f).coerceAtLeast(0f)))
+      if (curved > next) next = curved
+      if (peak >= CLIP_PEAK) clipAt[c] = now
+    }
+    level[c] = next
+
+    // The hold mark rides up with the level and then sinks to nothing over
+    // HOLD_DECAY_MS - unless the level comes back up to meet it first.
+    val heldNow = heldLevel(c, now)
+    if (next >= heldNow) {
+      holdLevel[c] = next
+      holdAt[c] = now
+    }
+
+    val clipLit = clipAt[c] != 0L && now - clipAt[c] < CLIP_HOLD_MS
+    return next > 0f || heldLevel(c, now) > 0f || clipLit
+  }
+
+  /** The hold mark's height right now on channel [c], 0-1, after its decay. */
+  private fun heldLevel(c: Int, now: Long): Float {
+    if (holdAt[c] == 0L) return 0f
+    val age = now - holdAt[c]
     if (age >= HOLD_DECAY_MS) return 0f
-    return holdLevel * (1f - age.toFloat() / HOLD_DECAY_MS)
+    return holdLevel[c] * (1f - age.toFloat() / HOLD_DECAY_MS)
+  }
+
+  /** Forget everything one channel was showing. UI thread only. */
+  private fun resetChannel(c: Int) {
+    level[c] = 0f
+    holdLevel[c] = 0f
+    holdAt[c] = 0L
+    clipAt[c] = 0L
+    drawnLit[c] = -1
+    drawnHoldPx[c] = -1
+    drawnClip[c] = false
   }
 
   private fun invalidateIfChanged(now: Long) {
-    val lit = (level * SEGMENTS).roundToInt()
-    val held = heldLevel(now)
-    // Compared in pixels, so a hold that has sunk less than one pixel since
-    // the last frame does not cost a redraw.
-    val holdPx = if (held <= 0f || held <= level) -1 else (held * columnHeight()).roundToInt()
-    val clip = clipAt != 0L && now - clipAt < CLIP_HOLD_MS
-    if (lit == drawnLit && holdPx == drawnHoldPx && clip == drawnClip) return
-    drawnLit = lit
-    drawnHoldPx = holdPx
-    drawnClip = clip
-    invalidate()
+    var changed = channels != drawnChannels
+    drawnChannels = channels
+    val column = columnHeight()
+    for (c in 0 until channels) {
+      val lit = (level[c] * SEGMENTS).roundToInt()
+      val held = heldLevel(c, now)
+      // Compared in pixels, so a hold that has sunk less than one pixel since
+      // the last frame does not cost a redraw.
+      val holdPx = if (held <= 0f || held <= level[c]) -1 else (held * column).roundToInt()
+      val clip = clipAt[c] != 0L && now - clipAt[c] < CLIP_HOLD_MS
+      if (lit == drawnLit[c] && holdPx == drawnHoldPx[c] && clip == drawnClip[c]) continue
+      drawnLit[c] = lit
+      drawnHoldPx[c] = holdPx
+      drawnClip[c] = clip
+      changed = true
+    }
+    if (changed) invalidate()
   }
 
   // --- Geometry ---------------------------------------------------------
@@ -298,22 +396,48 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     litHot.alpha = alpha
     unlit.alpha = alpha
 
+    if (drawnChannels < 2) {
+      drawColumn(canvas, 0, 0f, w, alpha)
+      return
+    }
+    /**
+     * Two columns share the width with the same gap the segments use between
+     * them, so the pair reads as one meter split down the middle rather than
+     * two meters. Capped at a third of the width so a very narrow meter still
+     * leaves each column something to light.
+     */
+    val split = min(gap(), w / 3f)
+    val columnWidth = (w - split) / 2f
+    drawColumn(canvas, 0, 0f, columnWidth, alpha)
+    drawColumn(canvas, 1, columnWidth + split, w, alpha)
+  }
+
+  /**
+   * One channel's column - cap, segments, hold line - between x [x0] and [x1].
+   *
+   * Named x0/x1 rather than left/right because a View already has `left` and
+   * `right` (its own position in the parent), and shadowing them here would be
+   * one typo away from drawing at the wrong place.
+   */
+  private fun drawColumn(canvas: Canvas, c: Int, x0: Float, x1: Float, alpha: Int) {
     val gap = gap()
     val cap = capHeight()
     val columnTop = cap + gap
     val column = columnHeight()
     val segment = ((column - gap * (SEGMENTS - 1)) / SEGMENTS).coerceAtLeast(1f)
-    val radius = min(radiusPx, segment / 2f)
-    val lit = drawnLit.coerceAtLeast(0)
+    // Also capped by the column's width: half a stereo meter can be narrower
+    // than the 4dp a full corner needs.
+    val radius = min(min(radiusPx, segment / 2f), (x1 - x0) / 2f)
+    val lit = drawnLit[c].coerceAtLeast(0)
 
     // The clip cap, dark until a buffer reaches full scale.
-    rect.set(0f, 0f, w, cap)
-    canvas.drawRoundRect(rect, radius, radius, if (drawnClip) litHot else unlit)
+    rect.set(x0, 0f, x1, cap)
+    canvas.drawRoundRect(rect, radius, radius, if (drawnClip[c]) litHot else unlit)
 
     // Drawn bottom up: segment 1 is the floor, segment 12 the top.
     for (n in 1..SEGMENTS) {
       val bottom = columnTop + column - (n - 1) * (segment + gap)
-      rect.set(0f, bottom - segment, w, bottom)
+      rect.set(x0, bottom - segment, x1, bottom)
       val paint = when {
         n > lit -> unlit
         // The JavaScript meter's rule: a segment whose top sits above HOT of
@@ -326,13 +450,14 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
 
     // The hold mark, a 2dp bar across the column at the held height, in the
     // colour of the zone it sits in.
-    if (drawnHoldPx > 0) {
-      val y = columnTop + column - drawnHoldPx
-      val held = drawnHoldPx / column
+    val holdPx = drawnHoldPx[c]
+    if (holdPx > 0) {
+      val y = columnTop + column - holdPx
+      val held = holdPx / column
       holdPaint.color = if (held > HOT) COLOR_ALERT else COLOR_HOLD
       holdPaint.alpha = alpha
       val thickness = 2f * density
-      rect.set(0f, (y - thickness / 2f).coerceAtLeast(columnTop), w, (y + thickness / 2f).coerceAtMost(columnTop + column))
+      rect.set(x0, (y - thickness / 2f).coerceAtLeast(columnTop), x1, (y + thickness / 2f).coerceAtMost(columnTop + column))
       canvas.drawRect(rect, holdPaint)
     }
   }
@@ -342,8 +467,8 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     // The hold mark is cached in pixels; a new size makes that stale. Worked
     // out again now rather than at the next frame, because if nothing is
     // moving there will not be a next frame.
-    drawnHoldPx = -1
-    drawnLit = -1
+    drawnHoldPx.fill(-1)
+    drawnLit.fill(-1)
     invalidateIfChanged(SystemClock.uptimeMillis())
   }
 
@@ -364,14 +489,19 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     LevelBus.unsubscribe(listener)
     removeCallbacks(tick)
     ticking.set(false)
-    pendingPeak.set(NO_SAMPLE)
-    level = 0f
+    pendingPeaks[0].set(NO_SAMPLE)
+    pendingPeaks[1].set(NO_SAMPLE)
     levelAt = 0L
-    holdAt = 0L
-    clipAt = 0L
-    drawnLit = -1
-    drawnHoldPx = -1
-    drawnClip = false
+    resetChannel(0)
+    resetChannel(1)
+    /**
+     * Back to one column, the shape every meter starts in. If the microphone
+     * is still stereo when this view is attached again, the first buffer
+     * says so and the second column comes back on the next frame.
+     */
+    stereoSeen = false
+    channels = 1
+    drawnChannels = 1
   }
 
   private companion object {

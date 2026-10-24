@@ -123,8 +123,12 @@ export type CameraCapabilities = {
 
 export type Orientation = "auto" | "portrait" | "landscape";
 
-/** A display-only viewfinder aid. Grows as zebras and false colour land. */
-export type MonitorMode = "off" | "peaking" | "zebra" | "falsecolor";
+/**
+ * A display-only viewfinder aid. "clipping" paints solid red wherever any one
+ * colour channel has blown (max(R,G,B) >= 0.98) - unlike "zebra", which tests
+ * luma and so misses a saturated blue or red that has clipped its own channel.
+ */
+export type MonitorMode = "off" | "peaking" | "zebra" | "falsecolor" | "clipping";
 
 /**
  * H.265 is half the bitrate for the same picture and every platform Framevane

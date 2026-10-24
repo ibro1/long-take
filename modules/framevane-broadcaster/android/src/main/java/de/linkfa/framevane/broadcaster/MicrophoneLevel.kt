@@ -22,8 +22,27 @@ import com.pedro.encoder.input.audio.CustomAudioEffect
  *
  * The buffer is returned untouched. The library uses this return value as the
  * frame it encodes, so anything else here would change what viewers hear.
+ *
+ * Stereo is measured per channel, in the same single pass. A stereo
+ * AudioRecord hands back interleaved frames - left sample, right sample - so
+ * walking the buffer four bytes at a time reads both sides with no second pass
+ * and no copy. Which layout the buffer is in comes from [isStereo], asked once
+ * per buffer rather than fixed at construction, because the microphone's
+ * channel setting is a broadcast setting the operator can change between one
+ * start and the next while this object lives as long as the view.
+ *
+ * @param isStereo whether the running AudioRecord was opened with two channels.
+ * In RootEncoder 2.7.0 `MicrophoneSource.start` and `AudioSource.init` (which
+ * `prepareAudio` goes through) both build the recorder from the source's own
+ * `isStereo` (CHANNEL_IN_STEREO when true, CHANNEL_IN_MONO when false), so that
+ * property is the layout of the buffer arriving here.
+ * @param onPeak the left and right peaks, 0-100; right is [LevelBus.MONO] when
+ * the microphone is mono, and left is then the only channel there is.
  */
-internal class MicrophoneLevel(private val onPeak: (Float) -> Unit) : CustomAudioEffect() {
+internal class MicrophoneLevel(
+  private val isStereo: () -> Boolean,
+  private val onPeak: (left: Float, right: Float) -> Unit,
+) : CustomAudioEffect() {
 
   private var heard = false
   private var firstBufferAt = 0L
@@ -39,20 +58,44 @@ internal class MicrophoneLevel(private val onPeak: (Float) -> Unit) : CustomAudi
   private var silentSince = 0L
 
   override fun process(pcmBuffer: ByteArray): ByteArray {
-    var peak = 0
+    val stereo = isStereo()
+    var left = 0
+    var right = 0
     var i = 0
     // Signed 16-bit little-endian, which is what the microphone is configured
     // for throughout. An odd trailing byte is not half a sample, so it is left.
-    while (i + 1 < pcmBuffer.size) {
-      val sample = ((pcmBuffer[i + 1].toInt() shl 8) or (pcmBuffer[i].toInt() and 0xFF)).toShort().toInt()
-      val magnitude = if (sample < 0) -sample else sample
-      if (magnitude > peak) peak = magnitude
-      i += 2
+    if (stereo) {
+      // Interleaved L, R. A trailing left sample with no right partner is half
+      // a frame and is left with the odd byte; the library sizes its buffer
+      // in whole frames, so in practice there is none.
+      while (i + 3 < pcmBuffer.size) {
+        val l = ((pcmBuffer[i + 1].toInt() shl 8) or (pcmBuffer[i].toInt() and 0xFF)).toShort().toInt()
+        val r = ((pcmBuffer[i + 3].toInt() shl 8) or (pcmBuffer[i + 2].toInt() and 0xFF)).toShort().toInt()
+        val lm = if (l < 0) -l else l
+        val rm = if (r < 0) -r else r
+        if (lm > left) left = lm
+        if (rm > right) right = rm
+        i += 4
+      }
+    } else {
+      while (i + 1 < pcmBuffer.size) {
+        val sample = ((pcmBuffer[i + 1].toInt() shl 8) or (pcmBuffer[i].toInt() and 0xFF)).toShort().toInt()
+        val magnitude = if (sample < 0) -sample else sample
+        if (magnitude > left) left = magnitude
+        i += 2
+      }
     }
-    note(peak)
+    /**
+     * The silence watch takes the louder side: a microphone is not dead
+     * because one of its channels is quiet, and a stereo pair where one side
+     * has failed is still sound arriving. This is also the same number the
+     * single-channel loop used to produce over the whole buffer, so nothing
+     * downstream of [note] changes with the layout.
+     */
+    note(if (right > left) right else left)
     // 0-100, matching what the library's own amplitude reported, so the meter
     // above it did not have to change.
-    onPeak(peak / MAX_SAMPLE * 100f)
+    onPeak(left / MAX_SAMPLE * 100f, if (stereo) right / MAX_SAMPLE * 100f else LevelBus.MONO)
     return pcmBuffer
   }
 

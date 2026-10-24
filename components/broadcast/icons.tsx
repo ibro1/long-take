@@ -30,6 +30,7 @@ import {
   Sun,
   SwitchCamera,
   Table2,
+  TriangleAlert,
   X,
   Zap,
   ZapOff,
@@ -71,6 +72,7 @@ function withClassName(...icons: LucideIcon[]) {
 }
 
 withClassName(
+  TriangleAlert,
   ChevronDown,
   Scan,
   Table2,
@@ -156,6 +158,8 @@ export {
   AlignJustify as ZebraIcon,
   /** False colour: exposure mapped to a palette. */
   Palette as FalseColorIcon,
+  /** Clipping: highlights that have run out of range, marked red. */
+  TriangleAlert as ClippingIcon,
   /** The drawer at the top of the frame: everything not on the glass. */
   ChevronDown as DrawerIcon,
   /** Analytics - peaking, zebras, false colour - behind one button, as Filmic keeps them. */

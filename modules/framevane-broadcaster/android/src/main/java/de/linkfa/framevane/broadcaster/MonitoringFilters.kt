@@ -17,7 +17,7 @@ import java.nio.ByteOrder
  * view clears any active filter before going on air (see clearMonitorForAir in
  * [BroadcasterView]) so none of them is ever encoded into the stream or file.
  *
- * All three share the library's vertex plumbing (copied from EdgeDetectionFilterRender);
+ * All four share the library's vertex plumbing (copied from EdgeDetectionFilterRender);
  * only the fragment shader differs. The base class [BaseFilterRender.draw] binds
  * the FBO and issues the GL_TRIANGLE_STRIP draw itself, so [drawFilter] only has
  * to bind the program, the quad attributes, the uniforms and the input texture.
@@ -262,4 +262,63 @@ void main() {
   gl_FragColor = vec4(col, 1.0);
 }
 """
+}
+
+/**
+ * Clipping: pixels where any one channel has reached [threshold] are painted
+ * solid red; everything else is the untouched picture.
+ *
+ * Not the same question zebras answer. Zebras test luma, and luma weights blue
+ * at a tenth - a saturated blue stage light or a red banner can blow its own
+ * channel flat while its luma sits comfortably mid-grey, so zebras never mark
+ * it and the detail in it is gone all the same. Testing max(R, G, B) catches
+ * the channel that clipped, whichever it is, which is what "is anything lost"
+ * actually means.
+ *
+ * Solid rather than striped because the point is a yes/no map of lost detail,
+ * read at a glance while the operator rides the exposure down until the red is
+ * gone. The red is filmic-alert (#FF3B30), the same alert colour as the level
+ * meter's clip cap, so "red means clipped" holds across picture and sound.
+ *
+ * @param threshold 0..1 per-channel cutoff. 0.98 rather than 1.0: the preview
+ * texture has been through the camera's own tone curve and an 8-bit surface,
+ * and a channel that has hit the ceiling routinely lands a code value or two
+ * short of it, so testing for exactly 1.0 would show almost nothing.
+ */
+class ClippingFilterRender(
+  private val threshold: Float = 0.98f,
+) : ShaderFilterRender() {
+
+  private var uThreshold = -1
+  private var uClipColor = -1
+
+  override fun fragmentShader(): String = """
+precision mediump float;
+uniform sampler2D uSampler;
+uniform float uThreshold;
+uniform vec3 uClipColor;
+varying vec2 vTextureCoord;
+void main() {
+  vec4 base = texture2D(uSampler, vTextureCoord);
+  float m = max(base.r, max(base.g, base.b));
+  gl_FragColor = mix(base, vec4(uClipColor, 1.0), step(uThreshold, m));
+}
+"""
+
+  override fun onInit() {
+    uThreshold = uniform("uThreshold")
+    uClipColor = uniform("uClipColor")
+  }
+
+  override fun onBindUniforms() {
+    GLES20.glUniform1f(uThreshold, threshold)
+    GLES20.glUniform3f(uClipColor, CLIP_R, CLIP_G, CLIP_B)
+  }
+
+  private companion object {
+    /** filmic-alert, #FF3B30. */
+    const val CLIP_R = 255f / 255f
+    const val CLIP_G = 59f / 255f
+    const val CLIP_B = 48f / 255f
+  }
 }
