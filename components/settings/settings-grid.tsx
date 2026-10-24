@@ -10,10 +10,42 @@ import {
   Smartphone,
   Video,
 } from "lucide-react-native";
-import { Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { useRouter } from "expo-router";
+import { type ComponentType, useEffect, useMemo, useState } from "react";
+import { BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 
-import { paper } from "@/components/settings/chrome";
+import AboutPage from "@/app/settings/about";
+import AudioPage from "@/app/settings/audio";
+import DevicePage from "@/app/settings/device";
+import InformationPage from "@/app/settings/information";
+import InterfacePage from "@/app/settings/interface";
+import NetworkPage from "@/app/settings/network";
+import PresetsPage from "@/app/settings/presets";
+import QuickAccessPage from "@/app/settings/quick-access";
+import RecordingsPage from "@/app/settings/recordings";
+import StreamingPage from "@/app/settings/streaming";
+import VideoPage from "@/app/settings/video";
+import { paper, SettingsPanelContext, type SettingsPanelNav } from "@/components/settings/chrome";
 import { Text } from "@/components/ui/text";
+
+/**
+ * The settings pages that open inside the panel. Anything not here - the
+ * Destinations editor, the Log - is a real screen: the panel closes and the
+ * router takes over.
+ */
+const PANEL_PAGES: Record<string, ComponentType> = {
+  "/settings/video": VideoPage,
+  "/settings/audio": AudioPage,
+  "/settings/device": DevicePage,
+  "/settings/presets": PresetsPage,
+  "/settings/streaming": StreamingPage,
+  "/settings/interface": InterfacePage,
+  "/settings/information": InformationPage,
+  "/settings/network": NetworkPage,
+  "/settings/about": AboutPage,
+  "/settings/quick-access": QuickAccessPage,
+  "/settings/recordings": RecordingsPage,
+};
 
 /**
  * Settings as Filmic lays them out: nine words on a light panel, three by
@@ -131,6 +163,10 @@ export function SettingsTiles({
  * The grid as an overlay on whatever is under it, which in practice is the
  * live picture: dimmed, not hidden, so the operator still sees the room.
  *
+ * Inner pages open in the same panel, the same size as the grid, as Filmic's
+ * do - never full screen. The panel keeps a stack: back steps out one page at a
+ * time to the grid, Android's back button included.
+ *
  * Absolute fill rather than a React Native Modal, because a Modal is a new
  * window and Android's immersive flags do not carry into it - the status and
  * navigation bars would come back over the picture every time it opened.
@@ -145,6 +181,41 @@ export function SettingsGrid({
   onTile: (tile: SettingsTile) => void;
 }) {
   const { width, height } = useWindowDimensions();
+  const router = useRouter();
+  const [stack, setStack] = useState<string[]>([]);
+
+  // Every opening starts at the grid.
+  useEffect(() => {
+    if (!open) setStack([]);
+  }, [open]);
+
+  const nav = useMemo<SettingsPanelNav>(
+    () => ({
+      go: (route) => {
+        if (PANEL_PAGES[route]) {
+          setStack((pages) => [...pages, route]);
+          return;
+        }
+        // A real screen (Destinations, the Log): leave the panel for it.
+        onClose();
+        // Typed routes are a union of literals; these are known paths.
+        router.push(route as never);
+      },
+      back: () => setStack((pages) => pages.slice(0, -1)),
+    }),
+    [onClose, router],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (stack.length > 0) nav.back();
+      else onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [open, stack.length, nav, onClose]);
+
   if (!open) return null;
 
   const landscape = width > height;
@@ -174,7 +245,25 @@ export function SettingsGrid({
           borderRadius: 16,
         }}
       >
-        <SettingsTiles onTile={onTile} tileHeight={tileHeight} />
+        {stack.length === 0 ? (
+          <SettingsTiles
+            tileHeight={tileHeight}
+            onTile={(tile) => {
+              const route = ROUTES[tile];
+              if (route) nav.go(route);
+              else onTile(tile);
+            }}
+          />
+        ) : (
+          <View style={{ height: tileHeight * 3, borderRadius: 16, overflow: "hidden" }}>
+            <SettingsPanelContext.Provider value={nav}>
+              {(() => {
+                const Current = PANEL_PAGES[stack.at(-1) ?? ""];
+                return Current ? <Current /> : null;
+              })()}
+            </SettingsPanelContext.Provider>
+          </View>
+        )}
       </View>
     </View>
   );

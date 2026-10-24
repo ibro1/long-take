@@ -246,7 +246,8 @@ function batteryFill(level: number, charging: boolean): string {
 function Battery({ level, charging }: { level: number; charging: boolean }) {
   const clamped = Math.max(0, Math.min(1, level));
   // Inner width is the body minus the 1.5dp stroke and a 1dp gap each side.
-  const inner = 22 - 2 * (1.5 + 1);
+  // The body's width (styles.batteryBody) less its border and padding each side.
+  const inner = styles.batteryBody.width - 2 * (1.5 + 1);
   return (
     <View style={styles.row}>
       {charging ? (
@@ -352,7 +353,7 @@ export function InfoPanel({
 
       <View style={[styles.center, { gap: 3 }]}>
         <Battery level={battery.level} charging={battery.charging} />
-        <Mono className="text-[11px]">{`${percent}%`}</Mono>
+        <Mono className="text-[10px]">{`${percent}%`}</Mono>
       </View>
     </Pressable>
   );
@@ -377,30 +378,32 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: "uppercase",
   },
+  // Filmic proportions: about a quarter of a landscape screen wide, a slim
+  // strip - it reads at a glance and leaves the bottom corners to the discs.
   panel: {
-    height: 62,
+    height: 46,
     borderRadius: 14,
     backgroundColor: PANEL_FILL,
-    paddingHorizontal: 14,
+    paddingHorizontal: 10,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
   },
-  fps: { fontSize: 20, lineHeight: 22, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  fpsUnit: { fontSize: 9, lineHeight: 11, fontWeight: "700", marginLeft: 2, marginTop: 1 },
-  resolution: { fontSize: 14, lineHeight: 17, fontWeight: "500" },
+  fps: { fontSize: 15, lineHeight: 17, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  fpsUnit: { fontSize: 7, lineHeight: 9, fontWeight: "700", marginLeft: 2, marginTop: 1 },
+  resolution: { fontSize: 11, lineHeight: 13, fontWeight: "500" },
   timecode: {
-    fontSize: 30,
-    lineHeight: 34,
+    fontSize: 22,
+    lineHeight: 26,
     fontWeight: "200",
     letterSpacing: 1,
     fontVariant: ["tabular-nums"],
   },
-  subline: { fontSize: 10, lineHeight: 12 },
-  divider: { width: 1, height: 34, backgroundColor: DIVIDER },
+  subline: { fontSize: 9, lineHeight: 11 },
+  divider: { width: 1, height: 26, backgroundColor: DIVIDER },
   batteryBody: {
-    width: 22,
-    height: 11,
+    width: 18,
+    height: 9,
     borderRadius: 3,
     borderWidth: 1.5,
     borderColor: filmic.color.inkMuted,
@@ -409,7 +412,7 @@ const styles = StyleSheet.create({
   },
   batteryNub: {
     width: 2,
-    height: 5,
+    height: 4,
     marginLeft: 1,
     borderTopRightRadius: 1,
     borderBottomRightRadius: 1,

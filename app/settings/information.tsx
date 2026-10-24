@@ -1,17 +1,16 @@
 import { useFocusEffect } from "@react-navigation/native";
 import Constants from "expo-constants";
-import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useState } from "react";
 import { Linking } from "react-native";
 
-import { Group, NavRow, Page } from "@/components/settings/chrome";
+import { Group, NavRow, Page, useSettingsNav } from "@/components/settings/chrome";
 import { dashboardSite } from "@/components/settings/phone";
 import { readLog } from "@/lib/broadcast/log";
 
 /** What the app is, what it has been doing, and the terms it runs under. */
 export default function InformationSettingsScreen() {
-  const router = useRouter();
+  const nav = useSettingsNav();
   const [logLines, setLogLines] = useState(0);
 
   // The log grows while a broadcast runs, so it is counted each time this
@@ -46,7 +45,7 @@ export default function InformationSettingsScreen() {
         <NavRow
           label="About Framevane"
           value={String(Constants.expoConfig?.version ?? "")}
-          onPress={() => router.push("/settings/about")}
+          onPress={() => nav.go("/settings/about")}
         />
         <NavRow
           label="Log"
@@ -55,7 +54,7 @@ export default function InformationSettingsScreen() {
               ? "Nothing logged this session."
               : `${logLines} ${logLines === 1 ? "line" : "lines"} from this session.`
           }
-          onPress={() => router.push("/(tabs)/log")}
+          onPress={() => nav.go("/(tabs)/log")}
         />
       </Group>
 

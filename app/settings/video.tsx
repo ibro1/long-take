@@ -1,9 +1,8 @@
 import { useFocusEffect } from "@react-navigation/native";
-import { useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import { View } from "react-native";
 
-import { ChoiceRow, Group, NavRow, Page, SwitchRow } from "@/components/settings/chrome";
+import { ChoiceRow, Group, NavRow, Page, SwitchRow, useSettingsNav } from "@/components/settings/chrome";
 import {
   CODEC_LABEL,
   codecOptions,
@@ -45,7 +44,7 @@ import type { RecordingFile } from "@/modules/framevane-broadcaster";
  * nine, which has no tile of its own for it.
  */
 export default function VideoSettingsScreen() {
-  const router = useRouter();
+  const nav = useSettingsNav();
   const [settings, setSettings] = useState<PhoneEncoderSettings>(() => loadSettings());
   const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
   const [codecs, setCodecs] = useState(() => codecSupport());
@@ -233,7 +232,7 @@ export default function VideoSettingsScreen() {
         <NavRow
           label="Recordings on the phone"
           detail={recordingsSummary(recordings)}
-          onPress={() => router.push("/settings/recordings")}
+          onPress={() => nav.go("/settings/recordings")}
         />
       </Group>
 

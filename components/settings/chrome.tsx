@@ -3,7 +3,7 @@ import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ArrowUpRight, ChevronLeft, ChevronRight } from "lucide-react-native";
 import { vars } from "nativewind";
-import { Children, type ReactElement, type ReactNode } from "react";
+import { Children, createContext, type ReactElement, type ReactNode, useContext } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -94,6 +94,34 @@ const NO_NATIVE_HEADER = { headerShown: false } as const;
  * `bottom` is in the edge list because there is no tab bar under these screens
  * any more - without it the last row sits under the Android navigation bar.
  */
+/**
+ * Set when a settings page is drawn inside the viewfinder's settings panel
+ * rather than as a screen of its own - Filmic opens every inner page in the
+ * same centred panel as the grid, over the picture, never full screen.
+ */
+export type SettingsPanelNav = {
+  /** Open another settings page in the panel, or leave for a real screen. */
+  go: (route: string) => void;
+  /** One page back; from the first page, back to the grid. */
+  back: () => void;
+};
+export const SettingsPanelContext = createContext<SettingsPanelNav | null>(null);
+
+/**
+ * Navigation for settings pages that works in both places: inside the panel
+ * it stays in the panel; as a screen it is the router.
+ */
+export function useSettingsNav(): SettingsPanelNav {
+  const panel = useContext(SettingsPanelContext);
+  const router = useRouter();
+  if (panel) return panel;
+  return {
+    // Typed routes are a union of literals; these pages pass known paths.
+    go: (route) => router.push(route as never),
+    back: () => (router.canGoBack() ? router.back() : router.replace("/(tabs)")),
+  };
+}
+
 export function Page({
   title,
   intro,
@@ -126,6 +154,42 @@ export function Page({
     }
     router.replace("/(tabs)");
   };
+
+  // Inside the settings panel: the same page, framed by the panel - no
+  // screen header, no status bar, no safe area; back steps within the panel.
+  const panel = useContext(SettingsPanelContext);
+  if (panel) {
+    return (
+      <View className="flex-1" style={[LIGHT_VARS, { backgroundColor: paper.page }]}>
+        <View
+          className="flex-row items-center gap-1 border-b border-hairline px-2 py-1"
+          style={HAIRLINE}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={panel.back}
+            hitSlop={8}
+            className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
+          >
+            <ChevronLeft size={22} color={paper.ink} />
+          </Pressable>
+          <Text className="flex-1 font-semibold" style={{ color: paper.ink, fontSize: 16 }}>
+            {title}
+          </Text>
+          {action}
+        </View>
+        <ScrollView className="flex-1" contentContainerClassName="gap-4 p-3 pb-6">
+          {intro ? (
+            <Text className="px-1" style={DETAIL}>
+              {intro}
+            </Text>
+          ) : null}
+          {children}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View className="flex-1" style={LIGHT_VARS}>

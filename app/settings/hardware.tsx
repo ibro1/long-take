@@ -1,7 +1,6 @@
-import { useRouter } from "expo-router";
 import { Pressable } from "react-native";
 
-import { Block, Group, Page, paper } from "@/components/settings/chrome";
+import { Block, Group, Page, paper, useSettingsNav } from "@/components/settings/chrome";
 import { Text } from "@/components/ui/text";
 
 /**
@@ -14,7 +13,7 @@ import { Text } from "@/components/ui/text";
  * this page says where they are and takes the operator there.
  */
 export default function HardwareSettingsScreen() {
-  const router = useRouter();
+  const nav = useSettingsNav();
 
   return (
     <Page title="Hardware and stabilization">
@@ -28,7 +27,7 @@ export default function HardwareSettingsScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Open the viewfinder"
-            onPress={() => router.navigate("/(tabs)")}
+            onPress={() => nav.go("/(tabs)")}
             className="mt-2 min-h-[44px] items-center justify-center rounded-full px-4 active:opacity-60"
             style={{ backgroundColor: paper.accent }}
           >

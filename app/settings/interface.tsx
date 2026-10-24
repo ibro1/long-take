@@ -1,8 +1,7 @@
 import { useFocusEffect } from "@react-navigation/native";
-import { useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 
-import { ChoiceRow, Group, NavRow, Page, SwitchRow } from "@/components/settings/chrome";
+import { ChoiceRow, Group, NavRow, Page, SwitchRow, useSettingsNav } from "@/components/settings/chrome";
 import {
   loadPreferences,
   type Preferences,
@@ -16,7 +15,7 @@ import { applyLanguagePreference } from "@/lib/i18n";
  * focus and exposure aids look. Nothing here changes what is sent.
  */
 export default function InterfaceSettingsScreen() {
-  const router = useRouter();
+  const nav = useSettingsNav();
   const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
 
   // Quick access is changed one screen further in, so its summary is re-read
@@ -36,7 +35,7 @@ export default function InterfaceSettingsScreen() {
           label="Quick access"
           detail="Which controls sit on the glass and which go in the menu"
           value={quickAccessSummary(preferences)}
-          onPress={() => router.push("/settings/quick-access")}
+          onPress={() => nav.go("/settings/quick-access")}
         />
         {/* Beside the other viewfinder choices, because it changes nothing but
             the words on the glass: the settings pages stay English for now. */}

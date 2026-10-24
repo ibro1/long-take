@@ -1,8 +1,7 @@
 import { useFocusEffect } from "@react-navigation/native";
-import { useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 
-import { Group, NavRow, Page } from "@/components/settings/chrome";
+import { Group, NavRow, Page, useSettingsNav } from "@/components/settings/chrome";
 import { loadSettings, type PhoneEncoderSettings } from "@/lib/broadcast/settings";
 
 /**
@@ -10,7 +9,7 @@ import { loadSettings, type PhoneEncoderSettings } from "@/lib/broadcast/setting
  * destinations themselves are a screen of their own; this is the way in.
  */
 export default function StreamingSettingsScreen() {
-  const router = useRouter();
+  const nav = useSettingsNav();
   const [settings, setSettings] = useState<PhoneEncoderSettings>(() => loadSettings());
 
   useFocusEffect(
@@ -25,12 +24,12 @@ export default function StreamingSettingsScreen() {
         <NavRow
           label="Destinations"
           detail="Where the broadcast is sent, and at what size"
-          onPress={() => router.push("/(tabs)/connections")}
+          onPress={() => nav.go("/(tabs)/connections")}
         />
         <NavRow
           label="On a bad connection"
           detail={networkSummary(settings)}
-          onPress={() => router.push("/settings/network")}
+          onPress={() => nav.go("/settings/network")}
         />
       </Group>
     </Page>
