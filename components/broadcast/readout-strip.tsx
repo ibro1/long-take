@@ -135,6 +135,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-evenly",
+    // A fixed gap as well: in landscape the strip shrinks to its content inside
+    // a centred column, where "evenly" has no spare room to spread, and the
+    // items ran together ("0.0x+2.0 EVAWB").
+    columnGap: 16,
     paddingHorizontal: filmic.space.sm,
     paddingVertical: filmic.space.xs,
   },

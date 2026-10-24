@@ -1,7 +1,9 @@
 import { useFocusEffect } from "@react-navigation/native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system";
+// The legacy entry keeps readAsStringAsync + EncodingType; the SDK 54 default
+// export no longer has them, and the upload threw at runtime.
+import * as FileSystem from "expo-file-system/legacy";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState, useContext } from "react";
@@ -394,7 +396,7 @@ export default function ConnectionsScreen() {
               A stream added, renamed or removed on the dashboard is the same here the next time
               this list is opened or pulled down.
             </Text>
-            {accountNote ? <Text className="text-xs text-amber-400">{accountNote}</Text> : null}
+            {accountNote ? <Note>{accountNote}</Note> : null}
             <View className="flex-row gap-2 pt-1">
               <Button
                 size="sm"
@@ -420,7 +422,7 @@ export default function ConnectionsScreen() {
               open Streams and press "Link a phone", then scan the code or type the eight
               characters under it.
             </Text>
-            {accountNote ? <Text className="text-xs text-amber-400">{accountNote}</Text> : null}
+            {accountNote ? <Note>{accountNote}</Note> : null}
             <View className="flex-row gap-2 pt-1">
               <Button className="flex-1" disabled={syncing} onPress={() => void scan()}>
                 <Text>{syncing ? "Linking" : "Scan to link"}</Text>
@@ -917,7 +919,7 @@ function Editor({
               The stream's name on the dashboard, and the title YouTube and Facebook are given
               when the broadcast is created. One name: changing it here changes it there.
             </Text>
-            {titleNote ? <Text className="text-xs text-amber-400">{titleNote}</Text> : null}
+            {titleNote ? <Note>{titleNote}</Note> : null}
           </>
         ) : (
           <Text className="text-xs text-muted-foreground">
@@ -1072,7 +1074,7 @@ function Editor({
               pipe, so the platform&rsquo;s own default decides.
             </Text>
           ) : null}
-          {watchNote ? <Text className="text-xs text-amber-400">{watchNote}</Text> : null}
+          {watchNote ? <Note>{watchNote}</Note> : null}
         </Field>
       ) : null}
 
@@ -1235,7 +1237,7 @@ function Editor({
               ) : null}
             </>
           ) : null}
-          {announceNote ? <Text className="text-xs text-amber-400">{announceNote}</Text> : null}
+          {announceNote ? <Note>{announceNote}</Note> : null}
         </Field>
       ) : null}
 
@@ -1541,7 +1543,7 @@ function SourceSection({ connection }: { connection: Connection }) {
     else setNote(action === "start" ? "Loop started." : "Loop stopped.");
   };
 
-  if (!source) return note ? <Text className="text-xs text-amber-400">{note}</Text> : null;
+  if (!source) return note ? <Note>{note}</Note> : null;
 
   const isPortrait = source.height > source.width;
 
@@ -1567,9 +1569,7 @@ function SourceSection({ connection }: { connection: Connection }) {
                 File ready: {source.sourceFile}
               </Text>
             ) : (
-              <Text className="text-xs text-amber-400">
-                No video uploaded yet.
-              </Text>
+              <Note>No video uploaded yet.</Note>
             )}
             <View className="flex-row gap-2 pt-1">
               <Pressable
@@ -1635,7 +1635,7 @@ function SourceSection({ connection }: { connection: Connection }) {
         </Text>
       </Field>
 
-      {note ? <Text className="text-xs text-amber-400">{note}</Text> : null}
+      {note ? <Note>{note}</Note> : null}
     </>
   );
 }
@@ -1704,7 +1704,7 @@ function DestinationOrientations({
         orientation gets center-cropped and re-encoded on the server, so one broadcast can go
         landscape to one channel and portrait to another.
       </Text>
-      {note ? <Text className="text-xs text-amber-400">{note}</Text> : null}
+      {note ? <Note>{note}</Note> : null}
     </>
   );
 }
@@ -1715,5 +1715,16 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <Text className="text-xs text-muted-foreground">{label}</Text>
       {children}
     </View>
+  );
+}
+
+/**
+ * A warning line. Darker amber when drawn on the settings panel's light paper,
+ * where the dark theme's pale amber all but disappears.
+ */
+function Note({ children }: { children: ReactNode }) {
+  const onPaper = useContext(SettingsPanelContext) !== null;
+  return (
+    <Text className={`text-xs ${onPaper ? "text-amber-700" : "text-amber-400"}`}>{children}</Text>
   );
 }

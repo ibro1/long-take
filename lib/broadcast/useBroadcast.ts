@@ -641,7 +641,9 @@ export function useBroadcast() {
       }
       if (next?.available) {
         setCapabilities(next);
-        setZoomState(next.zoom.current);
+        // A camera that has not been zoomed yet can report 0; that is "not set",
+        // not a zoom of nothing - read it as the lens's widest, normally 1x.
+        setZoomState(next.zoom.current > 0 ? next.zoom.current : Math.max(1, next.zoom.min));
         setExposureState(next.exposure.current);
         setExposureLockedState(next.exposure.locked);
         setAutoFocusState(next.autoFocus);
