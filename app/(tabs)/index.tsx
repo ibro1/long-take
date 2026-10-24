@@ -2,7 +2,7 @@ import { useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import { useFocusEffect } from "@react-navigation/native";
 import { useKeepAwake } from "expo-keep-awake";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   BackHandler,
@@ -30,7 +30,7 @@ import {
 } from "@/lib/broadcast/settings";
 import { BatteryBar } from "@/components/broadcast/battery";
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
-import { Reticles } from "@/components/broadcast/reticles";
+import { Reticles as ReticlesView } from "@/components/broadcast/reticles";
 import { ZoomRocker } from "@/components/broadcast/zoom-rocker";
 import {
   ColorDiamond,
@@ -40,7 +40,8 @@ import {
   StatusBadge,
   type BroadcastState,
 } from "@/components/broadcast/filmic-chrome";
-import { useSpotMeter } from "@/lib/broadcast/useSpotMeter";
+import { type SpotPoint, useSpotMeter } from "@/lib/broadcast/useSpotMeter";
+import { useReadout } from "@/lib/broadcast/readouts";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
 import { plainFailure } from "@/lib/broadcast/failure";
@@ -112,6 +113,7 @@ import {
   type AudioDevice,
   BroadcasterView,
   type CameraInfo,
+  LevelMeterView,
   type MonitorMode,
   type Orientation,
   setMonitor,
@@ -262,13 +264,10 @@ export default function BroadcastScreen() {
     lastDrop,
     lostAir,
     dismissLostAir,
-    bitrate,
     congested,
     stalled,
     dropped,
-    stats,
     setStatsWatched,
-    uptime,
     live,
     muted,
     cameras,
@@ -282,6 +281,7 @@ export default function BroadcastScreen() {
     toggleMute,
     onStatus,
     onBitrate,
+    onStats,
     onLevel,
     onCameras,
     onAudioDevices,
@@ -319,7 +319,6 @@ export default function BroadcastScreen() {
     pausedAt,
     togglePause,
     recording,
-    recordSeconds,
     toggleRecording,
     onRecord,
     onThermal,
@@ -330,7 +329,6 @@ export default function BroadcastScreen() {
     restoreMicrophone,
     takePhoto,
     notice,
-    log,
     onLog,
   } = useBroadcast();
 
@@ -343,7 +341,7 @@ export default function BroadcastScreen() {
    * the frame rate actually leaving it. Nothing here is shown on this screen:
    * it is for whoever has to find out afterwards why a class went wrong.
    */
-  useHealthHeartbeat({ connection, live, state, thermal, charge, stats, reconnects, lastDrop });
+  useHealthHeartbeat({ connection, live, state, thermal, charge, reconnects, lastDrop });
 
   /**
    * Asks the studio whether YouTube is actually on air, for the chip beside the
@@ -719,6 +717,9 @@ export default function BroadcastScreen() {
    * 400 MB of slack, and stat-ing a growing file every fifteen seconds to
    * refine a number that never needs refining is work for nothing.
    */
+  // Whole minutes: the estimate feeds a floor with 400 MB of slack, so a
+  // per-second figure only re-ran this - and re-rendered the screen - for nothing.
+  const recordMinute = useReadout((r) => Math.floor(r.recordSeconds / 60));
   const guard = useMemo(
     () =>
       guardFor({
@@ -727,7 +728,7 @@ export default function BroadcastScreen() {
         battery: charge.level,
         charging: charge.charging,
         recordingBitrate: recordingBitrateOf(connection),
-        takeBytes: recording ? (recordSeconds * recordingBitrateOf(connection)) / 8 : 0,
+        takeBytes: recording ? (recordMinute * 60 * recordingBitrateOf(connection)) / 8 : 0,
         recording,
         live,
       }),
@@ -738,7 +739,7 @@ export default function BroadcastScreen() {
       charge.charging,
       connection,
       recording,
-      recordSeconds,
+      recordMinute,
       live,
     ],
   );
@@ -802,15 +803,20 @@ export default function BroadcastScreen() {
    * held while the exposure is locked, and while a monitoring aid recolours the
    * picture it would otherwise be measuring.
    */
-  const [exposurePoint, setExposurePoint] = useState<{ x: number; y: number } | null>(null);
-  const onExposurePoint = useCallback((x: number, y: number) => setExposurePoint({ x, y }), []);
+  // A ref, not state: dragging the reticle reports a dozen points a second, and
+  // as state each one re-rendered the whole viewfinder. The meter reads it.
+  const exposurePoint = useRef<SpotPoint | null>(null);
+  const onExposurePoint = useCallback((x: number, y: number) => {
+    exposurePoint.current = { x, y, movedAt: Date.now() };
+  }, []);
   useSpotMeter({
-    point: exposurePoint,
+    pointRef: exposurePoint,
     enabled:
       (capabilities?.available ?? false) &&
       exposureRange.max > exposureRange.min &&
       !exposureLocked &&
-      monitor === "off",
+      monitor === "off" &&
+      panel === null,
     exposure,
     min: exposureRange.min,
     max: exposureRange.max,
@@ -831,9 +837,14 @@ export default function BroadcastScreen() {
   const [lead, setLead] = useState(LEFT_COLUMN);
   const [trail, setTrail] = useState(COLUMN);
 
-  const reticleInsets = wide
-    ? { left: lead, right: trail, top: 0, bottom: 0 }
-    : { left: 0, right: 0, top: 72, bottom: 230 };
+  // Memoised so the reticles see the same object between renders and skip them.
+  const reticleInsets = useMemo(
+    () =>
+      wide
+        ? { left: lead, right: trail, top: 0, bottom: 0 }
+        : { left: 0, right: 0, top: 72, bottom: 230 },
+    [wide, lead, trail],
+  );
 
   // Nothing yet, rather than the wrong thing. The check takes a frame or two.
   if (!answered) {
@@ -1085,9 +1096,7 @@ export default function BroadcastScreen() {
           frames that never left are a fault and keep their place. */}
       {live && (congested || dropped > 0) ? (
         <Chip tone="warn">
-          {stats ? (
-            <Mono className="text-xs">{t("hud.fpsOut", { fps: stats.measuredFps })}</Mono>
-          ) : null}
+          <FpsOut />
           {dropped > 0 ? <Mono className="text-xs">{t("hud.dropped", { count: dropped })}</Mono> : null}
         </Chip>
       ) : null}
@@ -1365,29 +1374,13 @@ export default function BroadcastScreen() {
     );
   };
 
-  /**
-   * The info panel's second line: what is leaving while on air, and what is
-   * going wrong when something is - the frames out and dropped that used to
-   * have a chip of their own.
-   */
+  /** Frames out and dropped, when something is going wrong while live. */
   const troubled = live && (congested || dropped > 0);
-  const infoSubline = !live
-    ? null
-    : troubled
-      ? [
-          stats ? t("hud.fpsOut", { fps: stats.measuredFps }) : null,
-          dropped > 0 ? t("hud.dropped", { count: dropped }) : null,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : bitrate > 0
-        ? formatKbps(bitrate)
-        : null;
   const infoWarn = troubled || (charge.level <= CRITICAL_BATTERY && !charge.charging);
 
   const panelBody =
     panel === null ? null : panel === "log" ? (
-      <LogPanel entries={log} onClose={closePanel} />
+      <LiveLogPanel onClose={closePanel} />
     ) : panel === "camera" ? (
       <Panel title="Camera" onClose={closePanel}>
         {cameras.length === 0 ? (
@@ -1740,47 +1733,7 @@ export default function BroadcastScreen() {
         </Text>
       </Panel>
     ) : (
-      <Panel title="What the encoder is doing" onClose={closePanel}>
-        <Readout label="Picture" value={stats ? `${stats.width}x${stats.height}` : "-"} />
-        <Readout
-          label={live ? "Frame rate out" : "Frame rate"}
-          value={
-            stats
-              ? live
-                ? `${stats.measuredFps} fps · ${stats.fps} asked for`
-                : `${stats.fps} fps asked for`
-              : "-"
-          }
-        />
-        <Readout label="Codec" value={stats ? stats.codec.toUpperCase() : "-"} />
-        <Readout
-          label="Target bitrate"
-          value={stats ? formatKbps(stats.bitrate) : "-"}
-        />
-        <Readout label="Going out" value={live ? formatKbps(bitrate) : "nothing"} />
-        {stats ? <BufferMeter items={stats.queueItems} capacity={stats.queueCapacity} /> : null}
-        <Readout
-          label="Dropped"
-          value={
-            stats ? `${stats.droppedVideoFrames} video · ${stats.droppedAudioFrames} audio` : "-"
-          }
-        />
-        <Readout
-          label="Sent"
-          value={
-            stats
-              ? `${(stats.bytesSent / 1_000_000).toFixed(1)} MB · ${stats.sentVideoFrames} frames`
-              : "-"
-          }
-        />
-        {/* The encoder's own answer, not ours - which is the point of reading it
-            back when the two disagree. */}
-        <Readout label="Recorder" value={stats ? (stats.recording ? "recording" : "off") : "-"} />
-        <Readout
-          label="Outgoing picture"
-          value={stats ? (stats.videoMuted ? "held" : "moving") : "-"}
-        />
-      </Panel>
+      <EncoderStatsPanel live={live} onClose={closePanel} />
     );
 
   return (
@@ -1789,6 +1742,7 @@ export default function BroadcastScreen() {
         style={FILL}
         onStatus={onStatus}
         onBitrate={onBitrate}
+        onStats={onStats}
         onLevel={onLevel}
         onCameras={onCameras}
         onAudioDevices={onAudioDevices}
@@ -1835,7 +1789,7 @@ export default function BroadcastScreen() {
           news even while paused, and a broadcast that has gone off air is no
           longer paused in any sense that matters to viewers. */}
       {state === "reconnecting" ? (
-        <ReconnectingOverlay seconds={uptime} />
+        <LiveReconnectingOverlay />
       ) : lostAir && !live && panel === null ? (
         <OffAirOverlay />
       ) : paused ? (
@@ -1896,10 +1850,7 @@ export default function BroadcastScreen() {
             <Chip tone={congested && live ? "warn" : "plain"}>
               <View className={`h-2 w-2 rounded-full ${live ? "bg-red-500" : "bg-white/40"}`} />
               {live && !paused ? (
-                <Mono className="text-xs text-white">
-                  {formatUptime(uptime)}
-                  {bitrate > 0 ? ` · ${formatKbps(bitrate)}` : ""}
-                </Mono>
+                <UptimeAndRate />
               ) : (
                 <>
                   <Text
@@ -1914,19 +1865,17 @@ export default function BroadcastScreen() {
                           ? t("hud.connecting")
                           : t("hud.offAir")}
                   </Text>
-                  {live ? <Mono className="text-xs">{formatUptime(uptime)}</Mono> : null}
+                  {live ? <Uptime /> : null}
                 </>
               )}
             </Chip>
 
             {/* Whether anybody can watch, which the chip above cannot say: it
                 knows the phone is sending, not that YouTube is on air. */}
-            {live ? <StudioChip settled={isSettled(uptime)} /> : null}
+            {live ? <LiveStudioChip /> : null}
 
             {recording ? (
-              <RecordPill
-                seconds={recordSeconds}
-                elapsed={formatUptime(recordSeconds)}
+              <LiveRecordPill
                 onStop={() => {
                   tick();
                   void toggleRecording();
@@ -2086,7 +2035,7 @@ export default function BroadcastScreen() {
         className="absolute inset-y-0 left-3 flex-row items-center justify-center gap-2"
       >
         <View pointerEvents="none" className="items-start">
-          <LevelMeter muted={muted} />
+          <Meter muted={muted} />
         </View>
 
 
@@ -2266,7 +2215,7 @@ export default function BroadcastScreen() {
               </View>
 
               <View pointerEvents="none" className="flex-1 items-center justify-center py-2">
-                <LevelMeter muted={muted} />
+                <Meter muted={muted} />
               </View>
 
               <ShutterButton label={primary.label} mode={primary.mode} onPress={primary.onPress} />
@@ -2291,11 +2240,9 @@ export default function BroadcastScreen() {
                       label={t("control.settings")}
                       onPress={() => router.push("/(tabs)/settings")}
                     />
-                    {live ? <StudioChip settled={isSettled(uptime)} /> : null}
+                    {live ? <LiveStudioChip /> : null}
                     {recording ? (
-                      <RecordPill
-                        seconds={recordSeconds}
-                        elapsed={formatUptime(recordSeconds)}
+                      <LiveRecordPill
                         onStop={() => {
                           tick();
                           void toggleRecording();
@@ -2376,12 +2323,13 @@ export default function BroadcastScreen() {
                   pointerEvents="box-none"
                   className="absolute inset-x-0 bottom-3 items-center"
                 >
-                  <InfoPanel
+                  <LiveInfoPanel
                     fps={connection?.fps ?? null}
                     resolution={connection ? `${connection.height}p` : null}
-                    timecode={clock(live ? uptime : recording ? recordSeconds : 0)}
-                    hot={live || recording}
-                    subline={infoSubline}
+                    live={live}
+                    recording={recording}
+                    troubled={troubled}
+                    dropped={dropped}
                     battery={{ level: charge.level, charging: charge.charging }}
                     warn={infoWarn}
                     onPress={() => togglePanel("stats")}
@@ -2490,6 +2438,152 @@ export default function BroadcastScreen() {
  * where there is room for them and where the choice is actually made; this
  * only has to answer "which one is live" at a glance.
  */
+/**
+ * The reticles skip the screen's renders: every prop they take is stable, so a
+ * new second on the clock or a new log line no longer re-renders them - their
+ * drags run on the UI thread and have nothing to wait for.
+ */
+const Reticles = memo(ReticlesView);
+
+/**
+ * The level meter, drawn natively when the installed build has the view: it is
+ * fed straight from the microphone on the UI thread, so it keeps moving however
+ * busy JavaScript gets - the meter froze first in an hour-long class when JS
+ * drew it. An older build falls back to the JS meter. Same 16 x 129 footprint.
+ */
+function Meter({ muted }: { muted: boolean }) {
+  if (LevelMeterView) {
+    return (
+      <View className="items-center gap-1.5">
+        <LevelMeterView muted={muted} style={{ width: 16, height: 129 }} />
+        {muted ? (
+          <Text className="text-[10px] font-semibold uppercase text-filmic-alert">Muted</Text>
+        ) : null}
+      </View>
+    );
+  }
+  return <LevelMeter muted={muted} />;
+}
+
+// --- Live readouts ---------------------------------------------------------
+//
+// Each of these reads one running number from the readouts store, so a new
+// second, a new bitrate or a new log line re-renders that one piece of text and
+// not the whole viewfinder around it. See lib/broadcast/readouts.ts for why.
+
+function Uptime() {
+  const uptime = useReadout((r) => r.uptime);
+  return <Mono className="text-xs">{formatUptime(uptime)}</Mono>;
+}
+
+function UptimeAndRate() {
+  const uptime = useReadout((r) => r.uptime);
+  const bitrate = useReadout((r) => r.bitrate);
+  return (
+    <Mono className="text-xs text-white">
+      {formatUptime(uptime)}
+      {bitrate > 0 ? ` · ${formatKbps(bitrate)}` : ""}
+    </Mono>
+  );
+}
+
+function FpsOut() {
+  const fps = useReadout((r) => r.stats?.measuredFps ?? null);
+  return fps === null ? null : <Mono className="text-xs">{t("hud.fpsOut", { fps })}</Mono>;
+}
+
+function LiveReconnectingOverlay() {
+  const uptime = useReadout((r) => r.uptime);
+  return <ReconnectingOverlay seconds={uptime} />;
+}
+
+/** Re-renders once, when the studio's settling window passes - not every second. */
+function LiveStudioChip() {
+  const settled = useReadout((r) => isSettled(r.uptime));
+  return <StudioChip settled={settled} />;
+}
+
+function LiveRecordPill({ onStop }: { onStop: () => void }) {
+  const seconds = useReadout((r) => r.recordSeconds);
+  return <RecordPill seconds={seconds} elapsed={formatUptime(seconds)} onStop={onStop} />;
+}
+
+function LiveLogPanel({ onClose }: { onClose: () => void }) {
+  const log = useReadout((r) => r.log);
+  return <LogPanel entries={log} onClose={onClose} />;
+}
+
+/**
+ * The info panel with its running parts filled in here: the clock (live
+ * uptime, or the take when only recording) and the second line - what is
+ * leaving, or what is going wrong.
+ */
+function LiveInfoPanel({
+  live,
+  recording,
+  troubled,
+  dropped,
+  ...panel
+}: Omit<React.ComponentProps<typeof InfoPanel>, "timecode" | "hot" | "subline"> & {
+  live: boolean;
+  recording: boolean;
+  troubled: boolean;
+  dropped: number;
+}) {
+  const seconds = useReadout((r) => (live ? r.uptime : recording ? r.recordSeconds : 0));
+  const bitrate = useReadout((r) => (live ? r.bitrate : 0));
+  const fpsOut = useReadout((r) => (troubled ? (r.stats?.measuredFps ?? null) : null));
+  const subline = !live
+    ? null
+    : troubled
+      ? [fpsOut !== null ? t("hud.fpsOut", { fps: fpsOut }) : null, dropped > 0 ? t("hud.dropped", { count: dropped }) : null]
+          .filter(Boolean)
+          .join(" ")
+      : bitrate > 0
+        ? formatKbps(bitrate)
+        : null;
+  return <InfoPanel {...panel} timecode={clock(seconds)} hot={live || recording} subline={subline} />;
+}
+
+/** The encoder's own numbers, refreshed each second while this panel is open. */
+function EncoderStatsPanel({ live, onClose }: { live: boolean; onClose: () => void }) {
+  const stats = useReadout((r) => r.stats);
+  const bitrate = useReadout((r) => r.bitrate);
+  return (
+    <Panel title="What the encoder is doing" onClose={onClose}>
+      <Readout label="Picture" value={stats ? `${stats.width}x${stats.height}` : "-"} />
+      <Readout
+        label={live ? "Frame rate out" : "Frame rate"}
+        value={
+          stats
+            ? live
+              ? `${stats.measuredFps} fps · ${stats.fps} asked for`
+              : `${stats.fps} fps asked for`
+            : "-"
+        }
+      />
+      <Readout label="Codec" value={stats ? stats.codec.toUpperCase() : "-"} />
+      <Readout label="Target bitrate" value={stats ? formatKbps(stats.bitrate) : "-"} />
+      <Readout label="Going out" value={live ? formatKbps(bitrate) : "nothing"} />
+      {stats ? <BufferMeter items={stats.queueItems} capacity={stats.queueCapacity} /> : null}
+      <Readout
+        label="Dropped"
+        value={stats ? `${stats.droppedVideoFrames} video · ${stats.droppedAudioFrames} audio` : "-"}
+      />
+      <Readout
+        label="Sent"
+        value={
+          stats ? `${(stats.bytesSent / 1_000_000).toFixed(1)} MB · ${stats.sentVideoFrames} frames` : "-"
+        }
+      />
+      {/* The encoder's own answer, not ours - which is the point of reading it
+          back when the two disagree. */}
+      <Readout label="Recorder" value={stats ? (stats.recording ? "recording" : "off") : "-"} />
+      <Readout label="Outgoing picture" value={stats ? (stats.videoMuted ? "held" : "moving") : "-"} />
+    </Panel>
+  );
+}
+
 /** Filmic's running clock: always hours, minutes and seconds, so it never changes width. */
 function clock(seconds: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");

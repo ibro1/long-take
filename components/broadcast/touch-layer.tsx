@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, type LayoutChangeEvent, View } from "react-native";
+import { type LayoutChangeEvent, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, {
+  type SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { Mono } from "./mono";
 
@@ -25,6 +33,9 @@ const ZOOM_HOLD_MS = 900;
 /** About how long a camera takes to rack focus, so the reticle outlives the act. */
 const RETICLE_HOLD_MS = 1100;
 
+/** Twenty zoom calls a second: smoother than the lens can move, cheap on the bridge. */
+const EMIT_MS = 50;
+
 type Props = {
   /** False when the lens has no range to give, which many ultra-wides do not. */
   canZoom: boolean;
@@ -43,6 +54,16 @@ type Props = {
   onTapPoint?: (point: { x: number; y: number; at: number }, frame: { width: number; height: number }) => void;
 };
 
+/**
+ * Visible now, gone shortly after. Called again before it fades, it simply
+ * restarts the hold. A worklet, but plain JS can call it too.
+ */
+function flash(opacity: SharedValue<number>, holdMs: number) {
+  "worklet";
+  opacity.value = 1;
+  opacity.value = withDelay(holdMs, withTiming(0, { duration: 260 }));
+}
+
 export function TouchLayer({
   canZoom,
   canFocus,
@@ -53,63 +74,104 @@ export function TouchLayer({
   onTapPoint,
 }: Props) {
   const size = useRef({ width: 0, height: 0 });
-  const pinchBase = useRef(zoom);
-  const latestZoom = useRef(zoom);
-  latestZoom.current = zoom;
+
+  // The pinch runs on the UI thread, so it reads the lens's zoom from a shared
+  // value rather than the prop.
+  const zoomSV = useSharedValue(zoom);
+  useEffect(() => {
+    zoomSV.value = zoom;
+  }, [zoomSV, zoom]);
+  const pinchBase = useSharedValue(zoom);
+  /** The latest pinched factor, the last one handed to onZoom, and when. */
+  const pending = useSharedValue(zoom);
+  const sent = useSharedValue(zoom);
+  const lastEmitAt = useSharedValue(0);
 
   const [reticle, setReticle] = useState<{ x: number; y: number } | null>(null);
-  const zoomFade = useFade(ZOOM_HOLD_MS);
-  const reticleFade = useFade(RETICLE_HOLD_MS);
+  const zoomOpacity = useSharedValue(0);
+  const reticleOpacity = useSharedValue(0);
+
+  // Reached through refs so the gesture is built once, not on every parent
+  // render that hands down fresh closures.
+  const handlers = useRef({ onZoom, onFocus, onTapPoint });
+  handlers.current = { onZoom, onFocus, onTapPoint };
+  const emitZoom = useCallback((level: number) => handlers.current.onZoom(level), []);
 
   const onLayout = useCallback((event: LayoutChangeEvent) => {
     size.current = event.nativeEvent.layout;
   }, []);
 
+  // A tap is one-off and ends in React state and native calls, so it is
+  // handled on the JS side in full.
+  const onTap = useCallback(
+    (x: number, y: number) => {
+      const { width, height } = size.current;
+      if (width === 0 || height === 0) return;
+      setReticle({ x, y });
+      flash(reticleOpacity, RETICLE_HOLD_MS);
+      handlers.current.onFocus(clamp01(x / width), clamp01(y / height));
+      handlers.current.onTapPoint?.({ x, y, at: Date.now() }, { width, height });
+    },
+    [reticleOpacity],
+  );
+
+  const { min: rangeMin, max: rangeMax } = range;
+
   const gesture = useMemo(() => {
     /**
-     * runOnJS because the zoom has to reach a native promise and a React
-     * state update either way. Driving it from the UI thread would buy
-     * smoothness the camera cannot deliver anyway - the lens moves in its own
-     * steps, well below sixty a second.
+     * On the UI thread, so a pinch keeps tracking the fingers while the JS
+     * thread is busy. Only the factor crosses to JS, at most every EMIT_MS
+     * and once more at the end so the lens lands where the fingers stopped.
      */
     const pinch = Gesture.Pinch()
       .enabled(canZoom)
-      .runOnJS(true)
       .onStart(() => {
-        pinchBase.current = latestZoom.current;
+        pinchBase.value = zoomSV.value;
+        pending.value = zoomSV.value;
+        sent.value = zoomSV.value;
+        lastEmitAt.value = 0;
       })
       .onUpdate((event) => {
-        const next = Math.min(range.max, Math.max(range.min, pinchBase.current * event.scale));
-        onZoom(next);
-        zoomFade.show();
+        const next = Math.min(rangeMax, Math.max(rangeMin, pinchBase.value * event.scale));
+        pending.value = next;
+        flash(zoomOpacity, ZOOM_HOLD_MS);
+        const now = Date.now();
+        if (now - lastEmitAt.value < EMIT_MS) return;
+        lastEmitAt.value = now;
+        sent.value = next;
+        scheduleOnRN(emitZoom, next);
+      })
+      .onEnd(() => {
+        if (pending.value === sent.value) return;
+        sent.value = pending.value;
+        scheduleOnRN(emitZoom, pending.value);
       });
 
     const tap = Gesture.Tap()
       .enabled(canFocus)
-      .runOnJS(true)
       .maxDuration(300)
       .onEnd((event, success) => {
-        if (!success) return;
-        const { width, height } = size.current;
-        if (width === 0 || height === 0) return;
-        setReticle({ x: event.x, y: event.y });
-        reticleFade.show();
-        onFocus(clamp01(event.x / width), clamp01(event.y / height));
-        onTapPoint?.({ x: event.x, y: event.y, at: Date.now() }, { width, height });
+        if (success) scheduleOnRN(onTap, event.x, event.y);
       });
 
     return Gesture.Simultaneous(pinch, tap);
   }, [
     canZoom,
     canFocus,
-    range.min,
-    range.max,
-    onZoom,
-    onFocus,
-    onTapPoint,
-    zoomFade.show,
-    reticleFade.show,
+    rangeMin,
+    rangeMax,
+    emitZoom,
+    onTap,
+    pinchBase,
+    zoomSV,
+    pending,
+    sent,
+    lastEmitAt,
+    zoomOpacity,
   ]);
+
+  const reticleStyle = useAnimatedStyle(() => ({ opacity: reticleOpacity.value }));
+  const zoomStyle = useAnimatedStyle(() => ({ opacity: zoomOpacity.value }));
 
   return (
     <GestureDetector gesture={gesture}>
@@ -117,12 +179,7 @@ export function TouchLayer({
         {reticle ? (
           <Animated.View
             pointerEvents="none"
-            style={{
-              position: "absolute",
-              left: reticle.x - 36,
-              top: reticle.y - 36,
-              opacity: reticleFade.opacity,
-            }}
+            style={[{ position: "absolute", left: reticle.x - 36, top: reticle.y - 36 }, reticleStyle]}
           >
             <View className="h-[72px] w-[72px] rounded-lg border-2 border-amber-300">
               <View className="m-auto h-2 w-2 rounded-full bg-amber-300" />
@@ -136,14 +193,7 @@ export function TouchLayer({
             of the components nativewind hands classes to. */}
         <Animated.View
           pointerEvents="none"
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            top: "50%",
-            alignItems: "center",
-            opacity: zoomFade.opacity,
-          }}
+          style={[{ position: "absolute", left: 0, right: 0, top: "50%", alignItems: "center" }, zoomStyle]}
         >
           <View className="rounded-full bg-black/70 px-3 py-1">
             <Mono className="text-base font-semibold">{zoom.toFixed(1)}x</Mono>
@@ -152,29 +202,6 @@ export function TouchLayer({
       </View>
     </GestureDetector>
   );
-}
-
-/** Visible while something is happening, gone shortly after it stops. */
-function useFade(holdMs: number) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const show = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    opacity.setValue(1);
-    timer.current = setTimeout(() => {
-      Animated.timing(opacity, { toValue: 0, duration: 260, useNativeDriver: true }).start();
-    }, holdMs);
-  }, [holdMs, opacity]);
-
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
-  return { opacity, show };
 }
 
 function clamp01(value: number): number {

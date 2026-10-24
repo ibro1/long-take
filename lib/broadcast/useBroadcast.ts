@@ -8,14 +8,13 @@ import type {
   AudioDevicesEvent,
   AudioInterruptedEvent,
   BitrateEvent,
+  StatsEvent,
   BroadcastState,
-  BroadcastStats,
   CameraCapabilities,
   CameraInfo,
   CamerasEvent,
   EncoderSettings,
   LevelEvent,
-  LogEntry,
   LogEvent,
   Orientation,
   ThermalEvent,
@@ -29,6 +28,7 @@ import { offerableInputs, stillOfferable } from "./inputs";
 import { pushLog, readLog, subscribeLog } from "./log";
 import { noteRecordEvent } from "./recordings";
 import { publishLevel, takePainted, takeRenders } from "./level-store";
+import { readReadouts, setReadouts } from "./readouts";
 import {
   loadPreferences,
   loadSettings,
@@ -88,7 +88,6 @@ export const ANTI_FLICKER_AUTO = 3;
 export function useBroadcast() {
   const [state, setState] = useState<BroadcastState>("idle");
   const [detail, setDetail] = useState("");
-  const [bitrate, setBitrate] = useState(0);
   const [muted, setMuted] = useState(false);
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [charge, setCharge] = useState<PowerState>({ level: 1, charging: false });
@@ -106,7 +105,6 @@ export function useBroadcast() {
   const [usableBytes, setUsableBytes] = useState(0);
   const [orientation, setOrientationState] = useState<Orientation>("auto");
   const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [uptime, setUptime] = useState(0);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 
@@ -250,7 +248,7 @@ export function useBroadcast() {
       next === "authError"
     ) {
       setStartedAt(null);
-      setBitrate(0);
+      setReadouts({ bitrate: 0 });
     }
   }, [resetDrops]);
 
@@ -259,8 +257,27 @@ export function useBroadcast() {
   const lastBitrateAt = useRef(0);
   const [stalled, setStalled] = useState(false);
 
+  /**
+   * The encoder's stats, pushed by the native side once a second while live.
+   * They used to be pulled with a synchronous call on the JS thread every
+   * second; the poll below now only covers what the push does not - the stats
+   * panel off air, and a dev client that predates the event.
+   */
+  /**
+   * Frames the encoder dropped. State, unlike the rest of the stats, because a
+   * drop changes what the screen says - and it changes rarely, so this re-renders
+   * the screen on a new drop, not on every second's fresh stats object.
+   */
+  const [dropped, setDropped] = useState(0);
+  const lastStatsEventAt = useRef(0);
+  const onStats = useCallback((event: { nativeEvent: StatsEvent }) => {
+    lastStatsEventAt.current = Date.now();
+    setReadouts({ stats: event.nativeEvent });
+    setDropped(event.nativeEvent.droppedVideoFrames);
+  }, []);
+
   const onBitrate = useCallback((event: { nativeEvent: BitrateEvent }) => {
-    setBitrate(event.nativeEvent.bitrate);
+    setReadouts({ bitrate: event.nativeEvent.bitrate });
     setCongested(event.nativeEvent.congested);
     lastBitrateAt.current = Date.now();
     setStalled(false);
@@ -828,7 +845,6 @@ export function useBroadcast() {
   const [pausedAt, setPausedAt] = useState(0);
   const [recording, setRecording] = useState(false);
   const [recordingSince, setRecordingSince] = useState<number | null>(null);
-  const [recordSeconds, setRecordSeconds] = useState(0);
   const [notice, setNotice] = useState<{ text: string; at: number; tone: "plain" | "bad" }>({
     text: "",
     at: 0,
@@ -1155,7 +1171,7 @@ export function useBroadcast() {
     if (next) {
       mutedBeforePause.current = muted;
       setPaused(true);
-      setPausedAt(uptime);
+      setPausedAt(readReadouts().uptime);
       setMuted(true);
       await Broadcaster.setVideoMuted(true).catch(() => {});
       await Broadcaster.setMuted(true).catch(() => {});
@@ -1167,7 +1183,7 @@ export function useBroadcast() {
       setMuted(false);
       await Broadcaster.setMuted(false).catch(() => {});
     }
-  }, [paused, muted, uptime]);
+  }, [paused, muted]);
 
   /**
    * A pause does not outlive the broadcast it was holding.
@@ -1212,7 +1228,8 @@ export function useBroadcast() {
 
   // --- The log -----------------------------------------------------------
 
-  const [log, setLog] = useState<LogEntry[]>(() => readLog());
+  // The log lives in the readouts store; seeded once so a reopened screen shows it.
+  useState(() => setReadouts({ log: readLog() }));
 
   /**
    * At most once a second. Every native line used to re-render the whole
@@ -1223,7 +1240,7 @@ export function useBroadcast() {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => {
       timer = null;
-      setLog(readLog());
+      setReadouts({ log: readLog() });
     };
     const unsubscribe = subscribeLog(() => {
       if (!timer) timer = setTimeout(flush, 1000);
@@ -1264,7 +1281,6 @@ export function useBroadcast() {
    * quietly throws frames away, and a throttled phone reports the frame rate it
    * was configured with right up until the picture stutters.
    */
-  const [stats, setStats] = useState<BroadcastStats | null>(null);
   const [statsWatched, setStatsWatched] = useState(false);
 
   /**
@@ -1281,17 +1297,22 @@ export function useBroadcast() {
   useEffect(() => {
     const ticking = startedAt !== null || recordingSince !== null || live || statsWatched;
     if (!ticking) {
-      setUptime(0);
-      setRecordSeconds(0);
+      setReadouts({ uptime: 0, recordSeconds: 0 });
       return;
     }
     const tick = () => {
       const now = Date.now();
-      setUptime(startedAt === null ? 0 : Math.floor((now - startedAt) / 1000));
-      setRecordSeconds(recordingSince === null ? 0 : Math.floor((now - recordingSince) / 1000));
+      setReadouts({
+        uptime: startedAt === null ? 0 : Math.floor((now - startedAt) / 1000),
+        recordSeconds: recordingSince === null ? 0 : Math.floor((now - recordingSince) / 1000),
+      });
       if (!live && !statsWatched) return;
+      // Pushed while live (onStats); poll only when that has gone quiet.
+      if (live && now - lastStatsEventAt.current < 2500) return;
       try {
-        setStats(Broadcaster.stats());
+        const next = Broadcaster.stats();
+        setReadouts({ stats: next });
+        setDropped(next.droppedVideoFrames);
       } catch {
         // Reading stats between a stop and a start is not an error worth
         // showing anyone.
@@ -1399,7 +1420,7 @@ export function useBroadcast() {
       const reason = reasonFor(error);
       setState("failed");
       setDetail(reason);
-      setBitrate(0);
+      setReadouts({ bitrate: 0 });
       setStartedAt(null);
       // The log is where this is read back afterwards; the banner is where it
       // is read now.
@@ -1425,7 +1446,7 @@ export function useBroadcast() {
     await Broadcaster.stopStream();
     setState("idle");
     setStartedAt(null);
-    setBitrate(0);
+    setReadouts({ bitrate: 0 });
     /**
      * Ending the broadcast stops the microphone with it, which would leave the
      * meter dead for the next one. Take it back for monitoring.
@@ -1488,7 +1509,6 @@ export function useBroadcast() {
     return () => clearInterval(timer);
   }, [recording]);
 
-  const dropped = stats?.droppedVideoFrames ?? 0;
 
   /**
    * A socket that fails is the native side's problem and it reconnects. A
@@ -1562,13 +1582,10 @@ export function useBroadcast() {
     lastDrop,
     lostAir,
     dismissLostAir,
-    bitrate,
     congested,
     stalled,
     dropped,
-    stats,
     setStatsWatched,
-    uptime,
     live,
     muted,
     cameras,
@@ -1586,6 +1603,7 @@ export function useBroadcast() {
     toggleMute,
     onStatus,
     onBitrate,
+    onStats,
     onLevel,
     onCameras,
     onAudioDevices,
@@ -1622,7 +1640,6 @@ export function useBroadcast() {
     pausedAt,
     togglePause,
     recording,
-    recordSeconds,
     toggleRecording,
     onRecord,
     onThermal,
@@ -1634,7 +1651,6 @@ export function useBroadcast() {
     takePhoto,
     notice,
 
-    log,
     onLog,
   };
 }

@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type LayoutChangeEvent, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, { type SharedValue, useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import Svg, { Path } from "react-native-svg";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { filmic } from "@/lib/theme/filmic";
 
@@ -23,6 +25,11 @@ import { filmic } from "@/lib/theme/filmic";
  *
  * Positions are kept normalised (0..1) of the FULL frame, not the picture area,
  * because the parent maps them straight onto the camera view underneath.
+ *
+ * The drag runs entirely on the UI thread: positions are shared values moved by
+ * gesture worklets and drawn by animated transforms, so a JS thread busy with an
+ * hour of live stream never makes a puck lag the thumb. Only the results - the
+ * focus point, the throttled metering point, a lock toggle - cross to JS.
  */
 
 /** Drawn size of either reticle. */
@@ -43,9 +50,53 @@ const SHADOW_COLOR = "rgba(0,0,0,0.35)";
 /** Throttle for live metering updates while dragging the exposure puck. */
 const EXPO_APPLY_MS = 80;
 
-type Frame = { width: number; height: number };
 type Insets = { left: number; right: number; top: number; bottom: number };
 type Point = { x: number; y: number };
+
+/**
+ * Keep the whole drawing inside the picture area, off the chrome, along one
+ * axis. If the area is narrower than a reticle, park it in the middle rather
+ * than inverting.
+ */
+function clampAxis(p: number, size: number, insetLo: number, insetHi: number): number {
+  "worklet";
+  const min = insetLo + HALF;
+  const max = size - insetHi - HALF;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, p));
+}
+
+/**
+ * Places a puck's touch box over its centre. Clamped here too, not only while
+ * dragging, so a rotation or a changed inset never leaves a puck under the chrome.
+ */
+function usePuckStyle(
+  nx: SharedValue<number>,
+  ny: SharedValue<number>,
+  frameW: SharedValue<number>,
+  frameH: SharedValue<number>,
+  inset: SharedValue<Insets>,
+) {
+  return useAnimatedStyle(() => {
+    const i = inset.value;
+    return {
+      transform: [
+        { translateX: clampAxis(nx.value * frameW.value, frameW.value, i.left, i.right) - TOUCH / 2 },
+        { translateY: clampAxis(ny.value * frameH.value, frameH.value, i.top, i.bottom) - TOUCH / 2 },
+      ],
+    };
+  });
+}
+
+const PUCK_BOX = {
+  position: "absolute",
+  left: 0,
+  top: 0,
+  width: TOUCH,
+  height: TOUCH,
+  alignItems: "center",
+  justifyContent: "center",
+} as const;
 
 /**
  * An SVG arc on a circle, angles in degrees measured clockwise from 12 o'clock,
@@ -133,217 +184,222 @@ export function Reticles({
   readonly onExposurePoint: (x: number, y: number) => void;
   readonly onExposureLock: (on: boolean) => void;
 }) {
-  const [frame, setFrame] = useState<Frame>({ width: 0, height: 0 });
-
-  // Normalised puck centres. Null until the first real layout, because the
-  // defaults sit inside the picture area and that needs the frame and insets.
-  // Mirrored into refs so a gesture reads the live position at onStart without
-  // listing the position in its deps - otherwise every drag frame would rebuild
-  // the gesture under the thumb and stutter the drag.
-  const [focusN, setFocusN] = useState<Point | null>(null);
-  const [expoN, setExpoN] = useState<Point | null>(null);
-  const focusNRef = useRef(focusN);
-  focusNRef.current = focusN;
-  const expoNRef = useRef(expoN);
-  expoNRef.current = expoN;
-
-  // Read through refs in onLayout so the callback stays stable and the defaults
-  // use whatever insets are current at the moment the frame first measures.
-  const insetsRef = useRef<Insets>(insets);
-  insetsRef.current = insets;
-  const onExposurePointRef = useRef(onExposurePoint);
-  onExposurePointRef.current = onExposurePoint;
-
-  const onLayout = useCallback((e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    setFrame({ width, height });
-    if (width === 0 || height === 0 || expoNRef.current !== null) return;
-    // First real layout: place both pucks apart so they read at once, and tell
-    // the parent where exposure is metering so the camera and the puck agree
-    // before the operator has touched anything.
-    const i = insetsRef.current;
-    const areaW = Math.max(0, width - i.left - i.right);
-    const areaH = Math.max(0, height - i.top - i.bottom);
-    const cy = (i.top + areaH / 2) / height;
-    const expo = { x: (i.left + areaW * 0.35) / width, y: cy };
-    const focus = { x: (i.left + areaW * 0.65) / width, y: cy };
-    expoNRef.current = expo;
-    focusNRef.current = focus;
-    setExpoN(expo);
-    setFocusN(focus);
-    onExposurePointRef.current(expo.x, expo.y);
-  }, []);
+  // React only needs to know whether there is anything to draw on yet; the
+  // size itself lives in shared values, which is where the worklets read it.
+  const [sized, setSized] = useState(false);
+  const frameW = useSharedValue(0);
+  const frameH = useSharedValue(0);
 
   // Deps on the inset numbers, not the object: a parent passing a fresh literal
-  // each render must not rebuild the gestures mid-drag.
+  // each render must not push a new value to the UI thread every render.
   const { left: insetL, right: insetR, top: insetT, bottom: insetB } = insets;
+  const inset = useSharedValue<Insets>({ left: insetL, right: insetR, top: insetT, bottom: insetB });
+  useEffect(() => {
+    inset.value = { left: insetL, right: insetR, top: insetT, bottom: insetB };
+  }, [inset, insetL, insetR, insetT, insetB]);
 
-  // Keep the whole drawing inside the picture area, off the chrome. If the area
-  // is narrower than a reticle, park it in the middle rather than inverting.
-  const clampX = useCallback(
-    (px: number) => {
-      const min = insetL + HALF;
-      const max = frame.width - insetR - HALF;
-      if (max < min) return (min + max) / 2;
-      return Math.min(max, Math.max(min, px));
-    },
-    [frame.width, insetL, insetR],
-  );
-  const clampY = useCallback(
-    (py: number) => {
-      const min = insetT + HALF;
-      const max = frame.height - insetB - HALF;
-      if (max < min) return (min + max) / 2;
-      return Math.min(max, Math.max(min, py));
-    },
-    [frame.height, insetT, insetB],
-  );
+  // Normalised puck centres. Not drawn until the first real layout has placed
+  // them, because the defaults sit inside the picture area and that needs the
+  // frame and insets.
+  const [placed, setPlaced] = useState(false);
+  const placedRef = useRef(false);
+  const focusX = useSharedValue(0);
+  const focusY = useSharedValue(0);
+  const expoX = useSharedValue(0);
+  const expoY = useSharedValue(0);
 
-  // Pixel centre of a puck, clamped at render time too so a rotation or a
-  // changed inset never leaves a puck under the chrome.
-  const toPx = useCallback(
-    (n: Point): Point => ({ x: clampX(n.x * frame.width), y: clampY(n.y * frame.height) }),
-    [clampX, clampY, frame],
+  // The callbacks are reached through refs so the gestures are built once:
+  // a parent passing fresh closures must not rebuild them under the thumb.
+  const insetsRef = useRef<Insets>(insets);
+  insetsRef.current = insets;
+  const onFocusRef = useRef(onFocus);
+  onFocusRef.current = onFocus;
+  const onExposurePointRef = useRef(onExposurePoint);
+  onExposurePointRef.current = onExposurePoint;
+  const onExposureLockRef = useRef(onExposureLock);
+  onExposureLockRef.current = onExposureLock;
+
+  const onLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      const { width, height } = e.nativeEvent.layout;
+      frameW.value = width;
+      frameH.value = height;
+      setSized(width > 0 && height > 0);
+      if (width === 0 || height === 0 || placedRef.current) return;
+      // First real layout: place both pucks apart so they read at once, and tell
+      // the parent where exposure is metering so the camera and the puck agree
+      // before the operator has touched anything.
+      const i = insetsRef.current;
+      const areaW = Math.max(0, width - i.left - i.right);
+      const areaH = Math.max(0, height - i.top - i.bottom);
+      const cy = (i.top + areaH / 2) / height;
+      const expo = { x: (i.left + areaW * 0.35) / width, y: cy };
+      const focus = { x: (i.left + areaW * 0.65) / width, y: cy };
+      placedRef.current = true;
+      expoX.value = expo.x;
+      expoY.value = expo.y;
+      focusX.value = focus.x;
+      focusY.value = focus.y;
+      setPlaced(true);
+      onExposurePointRef.current(expo.x, expo.y);
+    },
+    [frameW, frameH, expoX, expoY, focusX, focusY],
   );
 
   // Focus lock is a viewfinder state: there is no separate native focus-lock
   // beyond the hold that placing the point already applies, so the lock simply
-  // freezes the puck and signals "held".
+  // freezes the puck and signals "held". Both locks change rarely, so they stay
+  // React state (they recolour the drawing) and are mirrored for the worklets.
   const [focusLocked, setFocusLocked] = useState(false);
-  const focusLockedRef = useRef(focusLocked);
-  focusLockedRef.current = focusLocked;
+  const focusLockedSV = useSharedValue(false);
+  useEffect(() => {
+    focusLockedSV.value = focusLocked;
+  }, [focusLocked, focusLockedSV]);
   const exposureLockedRef = useRef(exposureLocked);
   exposureLockedRef.current = exposureLocked;
+  const exposureLockedSV = useSharedValue(exposureLocked);
+  useEffect(() => {
+    exposureLockedSV.value = exposureLocked;
+  }, [exposureLocked, exposureLockedSV]);
+
+  // JS-side landing points for the worklets.
+  const emitFocus = useCallback((x: number, y: number) => onFocusRef.current(x, y), []);
+  const emitExposurePoint = useCallback((x: number, y: number) => onExposurePointRef.current(x, y), []);
+  const toggleFocusLock = useCallback(() => setFocusLocked((v) => !v), []);
+  const toggleExposureLock = useCallback(() => onExposureLockRef.current(!exposureLockedRef.current), []);
 
   // --- Focus puck: drag to rack focus, tap to lock --------------------------
-  const focusStart = useRef<Point>({ x: 0, y: 0 });
+  const focusStart = useSharedValue<Point>({ x: 0, y: 0 });
   const focusGesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(canFocus)
-      .runOnJS(true)
       .onStart(() => {
-        if (focusLockedRef.current || !focusNRef.current) return;
+        if (focusLockedSV.value) return;
         // Start from where the puck is drawn (clamped), not the stored value, so
         // the first drag after a rotation does not jump.
-        focusStart.current = toPx(focusNRef.current);
+        const i = inset.value;
+        focusStart.value = {
+          x: clampAxis(focusX.value * frameW.value, frameW.value, i.left, i.right),
+          y: clampAxis(focusY.value * frameH.value, frameH.value, i.top, i.bottom),
+        };
       })
       .onUpdate((e) => {
-        if (focusLockedRef.current || frame.width === 0 || frame.height === 0) return;
-        const px = clampX(focusStart.current.x + e.translationX);
-        const py = clampY(focusStart.current.y + e.translationY);
-        const next = { x: px / frame.width, y: py / frame.height };
-        focusNRef.current = next;
-        setFocusN(next);
+        const w = frameW.value;
+        const h = frameH.value;
+        if (focusLockedSV.value || w === 0 || h === 0) return;
+        const i = inset.value;
+        focusX.value = clampAxis(focusStart.value.x + e.translationX, w, i.left, i.right) / w;
+        focusY.value = clampAxis(focusStart.value.y + e.translationY, h, i.top, i.bottom) / h;
       })
       .onEnd(() => {
-        if (focusLockedRef.current || !focusNRef.current) return;
+        if (focusLockedSV.value) return;
         // Rack focus once, on release, rather than spamming tap-to-focus events
         // across the whole drag.
-        onFocus(focusNRef.current.x, focusNRef.current.y);
+        scheduleOnRN(emitFocus, focusX.value, focusY.value);
       });
 
     const tap = Gesture.Tap()
       .enabled(canFocus)
-      .runOnJS(true)
       .maxDistance(10)
       .onEnd((_e, success) => {
-        if (success) setFocusLocked((v) => !v);
+        if (success) scheduleOnRN(toggleFocusLock);
       });
 
     return Gesture.Exclusive(pan, tap);
-  }, [canFocus, frame, clampX, clampY, toPx, onFocus]);
+  }, [canFocus, emitFocus, toggleFocusLock, focusLockedSV, focusStart, focusX, focusY, frameW, frameH, inset]);
 
   // --- Exposure puck: drag to set metering point, tap to AE-lock ------------
-  const expoStart = useRef<Point>({ x: 0, y: 0 });
-  const lastExpoApply = useRef(0);
+  const expoStart = useSharedValue<Point>({ x: 0, y: 0 });
+  const lastExpoApply = useSharedValue(0);
   const expoGesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(canExpose)
-      .runOnJS(true)
       .onStart(() => {
-        if (exposureLockedRef.current || !expoNRef.current) return;
-        expoStart.current = toPx(expoNRef.current);
+        if (exposureLockedSV.value) return;
+        const i = inset.value;
+        expoStart.value = {
+          x: clampAxis(expoX.value * frameW.value, frameW.value, i.left, i.right),
+          y: clampAxis(expoY.value * frameH.value, frameH.value, i.top, i.bottom),
+        };
       })
       .onUpdate((e) => {
-        if (exposureLockedRef.current || frame.width === 0 || frame.height === 0) return;
-        const px = clampX(expoStart.current.x + e.translationX);
-        const py = clampY(expoStart.current.y + e.translationY);
-        const next = { x: px / frame.width, y: py / frame.height };
-        expoNRef.current = next;
-        setExpoN(next);
-        // Meter live as it moves, but not every frame.
+        const w = frameW.value;
+        const h = frameH.value;
+        if (exposureLockedSV.value || w === 0 || h === 0) return;
+        const i = inset.value;
+        const x = clampAxis(expoStart.value.x + e.translationX, w, i.left, i.right) / w;
+        const y = clampAxis(expoStart.value.y + e.translationY, h, i.top, i.bottom) / h;
+        expoX.value = x;
+        expoY.value = y;
+        // Meter live as it moves, but not every frame: each update is a native
+        // camera call on the JS side.
         const now = Date.now();
-        if (now - lastExpoApply.current > EXPO_APPLY_MS) {
-          lastExpoApply.current = now;
-          onExposurePoint(next.x, next.y);
+        if (now - lastExpoApply.value > EXPO_APPLY_MS) {
+          lastExpoApply.value = now;
+          scheduleOnRN(emitExposurePoint, x, y);
         }
       })
       .onEnd(() => {
-        if (exposureLockedRef.current || !expoNRef.current) return;
-        onExposurePoint(expoNRef.current.x, expoNRef.current.y);
+        if (exposureLockedSV.value) return;
+        scheduleOnRN(emitExposurePoint, expoX.value, expoY.value);
       });
 
     const tap = Gesture.Tap()
       .enabled(canExpose)
-      .runOnJS(true)
       .maxDistance(10)
       .onEnd((_e, success) => {
-        if (success) onExposureLock(!exposureLockedRef.current);
+        if (success) scheduleOnRN(toggleExposureLock);
       });
 
     return Gesture.Exclusive(pan, tap);
-  }, [canExpose, frame, clampX, clampY, toPx, onExposurePoint, onExposureLock]);
+  }, [
+    canExpose,
+    emitExposurePoint,
+    toggleExposureLock,
+    exposureLockedSV,
+    expoStart,
+    lastExpoApply,
+    expoX,
+    expoY,
+    frameW,
+    frameH,
+    inset,
+  ]);
 
-  if (frame.width === 0 || frame.height === 0 || !focusN || !expoN) {
+  const focusStyle = usePuckStyle(focusX, focusY, frameW, frameH, inset);
+  const expoStyle = usePuckStyle(expoX, expoY, frameW, frameH, inset);
+
+  if (!sized || !placed) {
     return <View pointerEvents="box-none" style={{ flex: 1 }} onLayout={onLayout} />;
   }
-
-  const focusPx = toPx(focusN);
-  const expoPx = toPx(expoN);
 
   return (
     <View pointerEvents="box-none" style={{ flex: 1 }} onLayout={onLayout}>
       {canFocus ? (
         <GestureDetector gesture={focusGesture}>
-          <View
+          <Animated.View
             accessibilityRole="button"
             accessibilityLabel="Focus point"
             accessibilityHint="Drag to move. Tap to lock."
             accessibilityState={{ selected: focusLocked }}
-            style={{
-              position: "absolute",
-              left: focusPx.x - TOUCH / 2,
-              top: focusPx.y - TOUCH / 2,
-              width: TOUCH,
-              height: TOUCH,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+            style={[PUCK_BOX, focusStyle]}
           >
             <ReticleShape paths={FOCUS_PATHS} locked={focusLocked} />
-          </View>
+          </Animated.View>
         </GestureDetector>
       ) : null}
 
       {canExpose ? (
         <GestureDetector gesture={expoGesture}>
-          <View
+          <Animated.View
             accessibilityRole="button"
             accessibilityLabel="Exposure point"
             accessibilityHint="Drag to move. Tap to lock."
             accessibilityState={{ selected: exposureLocked }}
-            style={{
-              position: "absolute",
-              left: expoPx.x - TOUCH / 2,
-              top: expoPx.y - TOUCH / 2,
-              width: TOUCH,
-              height: TOUCH,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+            style={[PUCK_BOX, expoStyle]}
           >
             <ReticleShape paths={EXPO_PATHS} locked={exposureLocked} />
-          </View>
+          </Animated.View>
         </GestureDetector>
       ) : null}
     </View>

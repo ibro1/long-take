@@ -1,3 +1,5 @@
+import { AppState } from "react-native";
+
 import { scrub } from "@/lib/scrub";
 import { getItem, setItem } from "@/lib/storage";
 import type { LogEntry } from "@/modules/framevane-broadcaster";
@@ -54,8 +56,23 @@ let entries: LogEntry[] = restore();
 const listeners = new Set<() => void>();
 
 let saving: ReturnType<typeof setTimeout> | undefined;
+let lastWrite = 0;
+
+/**
+ * Ten seconds between writes. Each one serialises all 400 lines on the JS
+ * thread, and during an hour-long class that thread was saturated; a log write
+ * every two seconds was a share of it spent on a record nobody reads until
+ * afterwards. Going to the background writes at once (below), so the window
+ * this leaves is a crash inside ten seconds of the last write.
+ */
+const SAVE_EVERY_MS = 10_000;
 
 function write(): void {
+  if (saving) {
+    clearTimeout(saving);
+    saving = undefined;
+  }
+  lastWrite = Date.now();
   try {
     setItem(STORE_KEY, entries);
   } catch {
@@ -63,36 +80,33 @@ function write(): void {
   }
 }
 
-/**
- * Written at most every two seconds. A congested broadcast logs several lines a
- * second, and a write per line is work the phone does for nothing while it is
- * already the thing getting hot.
- */
+/** At most one write per window, however many lines arrive in it. */
 function save(): void {
   if (saving) return;
-  saving = setTimeout(() => {
-    saving = undefined;
-    write();
-  }, 2000);
+  saving = setTimeout(write, SAVE_EVERY_MS);
 }
 
 /**
- * Written now, and the pending write with it.
+ * An error line, written now unless a write already happened in the window.
  *
  * An error is the line most likely to be followed by the process dying - the
- * encoder that failed is often what takes the app down a moment later - and
- * the two-second wait meant the crash took the line with it. The log kept
- * across restarts exists to answer "why did that broadcast end", and it was
- * losing exactly the lines that answer it. Errors are rare enough that a write
- * each costs nothing worth measuring.
+ * encoder that failed is often what takes the app down a moment later - so it
+ * jumps the queue. But a failing encoder can log an error a second, and a write
+ * per error was the same per-line cost the window exists to stop; inside the
+ * window it waits for the scheduled write like any other line.
  */
-function saveNow(): void {
-  if (saving) {
-    clearTimeout(saving);
-    saving = undefined;
-  }
-  write();
+function saveSoon(): void {
+  if (Date.now() - lastWrite > SAVE_EVERY_MS) write();
+  else save();
 }
+
+/**
+ * Written as the app leaves the foreground: Android may kill a backgrounded
+ * process without another JS tick, and a pending write would go with it.
+ */
+AppState.addEventListener("change", (next) => {
+  if ((next === "background" || next === "inactive") && saving) write();
+});
 
 function announce(): void {
   for (const listener of listeners) listener();
@@ -106,7 +120,7 @@ function announce(): void {
 export function pushLog(entry: LogEntry): void {
   entries.push(clean(entry));
   if (entries.length > CAPACITY) entries = entries.slice(-CAPACITY);
-  if (entry.level === "error") saveNow();
+  if (entry.level === "error") saveSoon();
   else save();
   announce();
 }

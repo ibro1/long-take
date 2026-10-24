@@ -16,7 +16,6 @@ import android.media.MediaCodec
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Handler
-import android.os.Looper
 import android.view.PixelCopy
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -78,6 +77,17 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   internal val onRecord by EventDispatcher()
   internal val onAudioInterrupted by EventDispatcher()
   internal val onThermal by EventDispatcher()
+
+  /**
+   * The same map [stats] returns, pushed once a second from the bitrate tick.
+   *
+   * The screen used to call `stats()` on a one-second timer while live, and a
+   * synchronous native Function blocks the JavaScript thread for as long as it
+   * takes - a hop to native and back, every second, for an hour, on the
+   * thread that is already the bottleneck. Pushing the same numbers from a
+   * clock the library already runs costs JavaScript only the handler.
+   */
+  private val onStats by EventDispatcher()
 
   val camera = Camera2Source(context)
   val microphone = MicrophoneSource()
@@ -446,19 +456,33 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    * going live, which is the only time the answer is cheap.
    *
    * The peak is measured on every PCM buffer, which is dozens of times a
-   * second - far more than a bar on a screen can show - so it is held and
-   * forwarded ten times a second. The measuring is done in [MicrophoneLevel]
-   * rather than with the library's own AmplitudeEffect, for a reason worth
-   * reading before anyone swaps it back.
+   * second - far more than a bar on a screen can show. Every one of them goes
+   * to [LevelBus], which is what the native [LevelMeterView] draws from on its
+   * own thread with no JavaScript in between; that is the meter an operator
+   * should be looking at. The `onLevel` event is kept for what still reads
+   * the level in JavaScript - the diagnostics, an older screen - and is held
+   * to every [levelEventIntervalMs], a quarter of a second unless JavaScript
+   * asks for finer, because each event is work on the JavaScript thread and
+   * an hour into a broadcast that thread has none to spare.
+   *
+   * The measuring is done in [MicrophoneLevel] rather than with the library's
+   * own AmplitudeEffect, for a reason worth reading before anyone swaps it
+   * back.
    */
   private var peakSinceEmit = 0f
   @Volatile
   private var lastLevelEmit = 0L
 
   private val levelMeter = MicrophoneLevel { peak ->
+    // Every buffer, unthrottled: the native meter wants the clip it would
+    // otherwise miss between two events, and publishing is a loop over a
+    // copy-on-write set with nothing to wait on.
+    LevelBus.publish(peak)
+    val interval = levelEventIntervalMs
     if (peak > peakSinceEmit) peakSinceEmit = peak
     val now = System.currentTimeMillis()
-    if (now - lastLevelEmit >= LEVEL_INTERVAL_MS) {
+    // Zero turns the event off, for a screen that draws only the native meter.
+    if (interval > 0L && now - lastLevelEmit >= interval) {
       lastLevelEmit = now
       val held = peakSinceEmit
       peakSinceEmit = 0f
@@ -551,6 +575,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
           val frame = holder.surfaceFrame
           runCatching {
             stream.startPreview(holder.surface, frame.width(), frame.height())
+            logCaptureSize(frame.width(), frame.height())
           }.onFailure { log(LOG_WARN, "The preview would not start: ${it.message}") }
         }
         }
@@ -990,6 +1015,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         val frame = surfaceView.holder.surfaceFrame
         runCatching {
           stream.startPreview(surfaceView.holder.surface, frame.width(), frame.height())
+          logCaptureSize(frame.width(), frame.height())
         }.onFailure { log(LOG_WARN, "The viewfinder did not come back: ${it.message}") }
         // A preview restart builds a new capture request, which starts at the
         // camera's own defaults.
@@ -1528,6 +1554,22 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
   /** Apply a monitoring aid over the preview, or "off" to clear it. */
   fun setMonitor(mode: String) {
+    /**
+     * Refused on air, not just cleared on the way to it.
+     *
+     * The filter goes onto the GL chain that feeds the encoder as well as the
+     * viewfinder, so an aid applied while live is encoded: viewers would get
+     * red focus outlines or zebra stripes over the sermon, and the recording
+     * would keep them for good. [clearMonitorForAir] covers going live with
+     * one on; this covers the other half - a tap on the aid while already
+     * live, from a screen whose idea of the state is a frame behind. "off" is
+     * always allowed, because clearing is what is wanted.
+     */
+    if (mode != "off" && (stream.isStreaming || stream.isRecording)) {
+      log(LOG_WARN, "The $mode monitor is not available while live or recording; it would be encoded")
+      if (monitorFilter != null) setMonitor("off")
+      return
+    }
     val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return
     runCatching {
       gl.clearFilters()
@@ -1559,6 +1601,49 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     if (monitorFilter != null) setMonitor("off")
   }
 
+  // --- Capture size ------------------------------------------------------
+
+  /** The last capture line logged, so a preview restarted unchanged says nothing new. */
+  private var lastCaptureSummary = ""
+
+  /**
+   * Names the size the camera is actually capturing at, against the stream's.
+   *
+   * A camera producing more pixels than the stream needs costs heat on every
+   * frame for nothing - the GL chain scales the surplus away before the
+   * encoder sees it - and heat is what ends hour-long broadcasts. This is the
+   * line that shows whether that is happening.
+   *
+   * The capture size is read back from RootEncoder rather than assumed. In
+   * 2.7.0, `prepareVideo` initialises the camera source at
+   * max(stream, record) in each dimension, `Camera2Source.create` refuses any
+   * size the lens does not list exactly, and `start` sets that size as the
+   * camera SurfaceTexture's buffer - so `camera.width` x `camera.height` is the
+   * size Camera2 is delivering. It is the sensor-shaped size: a portrait
+   * broadcast captures landscape and is turned in GL, so the comparison is
+   * against the stream as configured, before rotation.
+   *
+   * Once per preview start, and only when something in it changed: a rotation
+   * restarts the preview, and the same line twice is noise.
+   */
+  private fun logCaptureSize(previewWidth: Int, previewHeight: Int) {
+    val captureW = camera.width
+    val captureH = camera.height
+    val record = recordSizeFor(videoWidth, videoHeight, recordHeight)
+    // A larger recording is a reason to capture larger; anything beyond the
+    // bigger of the two is surplus.
+    val neededW = maxOf(videoWidth, record?.first ?: 0)
+    val neededH = maxOf(videoHeight, record?.second ?: 0)
+    val larger = captureW.toLong() * captureH > neededW.toLong() * neededH
+    val summary = "Camera captures ${captureW}x${captureH} for a ${videoWidth}x${videoHeight} stream" +
+      (record?.let { " (recording ${it.first}x${it.second})" } ?: "") +
+      ", rotation ${preparedRotation}, preview surface ${previewWidth}x${previewHeight}" +
+      if (larger) "; the camera is capturing more than the encoders use" else ""
+    if (summary == lastCaptureSummary) return
+    lastCaptureSummary = summary
+    log(LOG_INFO, summary)
+  }
+
   // --- Preview fit -------------------------------------------------------
 
   /**
@@ -1588,17 +1673,87 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   // under the reticle and the screen steers exposure compensation toward a
   // mid-grey there. Compensation is the one exposure control every camera has.
 
-  private val meterHandler by lazy { Handler(Looper.getMainLooper()) }
+  /**
+   * The spot meter's own thread, its one bitmap, and the request in flight.
+   *
+   * The reticle samples several times a second, and it used to do all of it
+   * on the main thread: a fresh 16x16 bitmap per sample, the PixelCopy answer
+   * delivered to the main looper, the pixels summed there. None of it is big,
+   * but the main thread is the one that draws the viewfinder chrome and runs
+   * the native level meter, and garbage made several times a second for an
+   * hour is collected at moments nobody chooses. So the copy lands on a
+   * thread of its own, the sum is done there, and the bitmap is made once.
+   *
+   * One request at a time, because there is one bitmap: a second sample asked
+   * for while a copy is still writing into it would read half of one patch
+   * and half of another. It is answered -1 - the meter's "no reading" - and
+   * the next tick of the meter asks again, which is sooner than a queue would
+   * have delivered anyway.
+   *
+   * The request is an object rather than a flag so that a copy answered after
+   * a teardown cannot settle a newer request: only the one it belongs to can
+   * be cleared by it.
+   */
+  private class MeterRequest(val promise: Promise)
+
+  private val meterInFlight = java.util.concurrent.atomic.AtomicReference<MeterRequest?>(null)
+  private val meterLock = Any()
+  private var meterThread: android.os.HandlerThread? = null
+  private var meterThreadHandler: Handler? = null
+  private var meterBitmap: Bitmap? = null
+
+  /**
+   * The bitmap's pixels, read out for summing. Made and dropped with the
+   * bitmap, so a teardown that starts a fresh thread also starts a fresh
+   * array, and an answer still running on the old thread cannot scribble
+   * over a new one's.
+   */
+  private var meterPixels: IntArray? = null
+
+  /**
+   * The meter thread, started the first time it is wanted.
+   *
+   * Lazily, because most sessions never touch the reticle and a parked thread
+   * is still a thread; and re-creatable, because [release] stops it and this
+   * view comes back from a tab change with the same instance.
+   */
+  private fun meterHandler(): Handler = synchronized(meterLock) {
+    meterThreadHandler ?: android.os.HandlerThread("framevane-spot-meter").let { thread ->
+      thread.start()
+      meterThread = thread
+      Handler(thread.looper).also { meterThreadHandler = it }
+    }
+  }
+
+  /**
+   * Stops the meter thread, from [release].
+   *
+   * A copy still in flight would have its answer posted to a looper that has
+   * quit, which drops it, and JavaScript would wait on that promise forever -
+   * so it is answered here, with the same -1 any failed copy gets. The bitmap
+   * is let go rather than recycled: the copy may still be writing into it.
+   */
+  private fun stopMeterThread() {
+    meterInFlight.getAndSet(null)?.promise?.resolve(-1.0)
+    synchronized(meterLock) {
+      meterThread?.quitSafely()
+      meterThread = null
+      meterThreadHandler = null
+      meterBitmap = null
+      meterPixels = null
+    }
+  }
 
   /**
    * Mean brightness (Rec.709 luma of the displayed pixels, 0..1) of a small box
    * of the preview around a point given in fractions of this view, or -1 when
-   * the preview cannot be read - no surface yet, or the copy failed.
+   * the preview cannot be read - no surface yet, a copy already running, or
+   * the copy failed.
    *
    * The box is about an eighth of the short side: big enough that a steady
    * hand reads the same patch from one sample to the next, small enough to be
    * a spot. It is copied straight into a 16x16 bitmap, so the GPU does the
-   * averaging and the CPU only sums 256 pixels.
+   * averaging and the CPU only sums 256 pixels - on the meter thread.
    */
   fun sampleLuma(x: Float, y: Float, promise: Promise) {
     val w = surfaceView.width
@@ -1620,17 +1775,40 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       promise.resolve(-1.0)
       return
     }
-    val bitmap = Bitmap.createBitmap(METER_SIDE, METER_SIDE, Bitmap.Config.ARGB_8888)
+
+    val request = MeterRequest(promise)
+    if (!meterInFlight.compareAndSet(null, request)) {
+      // A copy is still writing into the one bitmap; see the note above.
+      promise.resolve(-1.0)
+      return
+    }
+    val handler = meterHandler()
+    val (bitmap, pixels) = synchronized(meterLock) {
+      val b = meterBitmap ?: Bitmap.createBitmap(METER_SIDE, METER_SIDE, Bitmap.Config.ARGB_8888)
+        .also { meterBitmap = it }
+      val p = meterPixels ?: IntArray(METER_SIDE * METER_SIDE).also { meterPixels = it }
+      b to p
+    }
+    // A teardown between the claim and here has answered this request already.
+    if (meterInFlight.get() !== request) return
     try {
       PixelCopy.request(surfaceView, box, bitmap, { result ->
+        // On the meter thread. Only the request this copy belongs to may be
+        // answered by it; anything else was settled by a teardown already.
+        if (meterInFlight.get() !== request) return@request
         if (result != PixelCopy.SUCCESS) {
-          bitmap.recycle()
-          promise.resolve(-1.0)
+          if (meterInFlight.compareAndSet(request, null)) request.promise.resolve(-1.0)
           return@request
         }
-        val pixels = IntArray(METER_SIDE * METER_SIDE)
+        /**
+         * Read out while the claim is still held, and only released after:
+         * the moment it is released another sample may start a copy into
+         * this same bitmap, and PixelCopy writes from its own thread, not
+         * this one. A teardown that takes the claim mid-read has already
+         * answered -1 and dropped the bitmap, so the compare-and-set below
+         * fails and nothing is answered twice.
+         */
         bitmap.getPixels(pixels, 0, METER_SIDE, 0, 0, METER_SIDE, METER_SIDE)
-        bitmap.recycle()
         var sum = 0.0
         for (c in pixels) {
           val r = (c shr 16 and 0xff) / 255.0
@@ -1638,12 +1816,11 @@ class BroadcasterView(context: Context, appContext: AppContext) :
           val b = (c and 0xff) / 255.0
           sum += 0.2126 * r + 0.7152 * g + 0.0722 * b
         }
-        promise.resolve(sum / pixels.size)
-      }, meterHandler)
+        if (meterInFlight.compareAndSet(request, null)) request.promise.resolve(sum / pixels.size)
+      }, handler)
     } catch (e: IllegalArgumentException) {
       // Thrown when the surface is released between the check and the copy.
-      bitmap.recycle()
-      promise.resolve(-1.0)
+      if (meterInFlight.compareAndSet(request, null)) promise.resolve(-1.0)
     }
   }
 
@@ -1941,6 +2118,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     stopWatchingAudioInterruptions()
     stopWatchingThermal()
     cameraHandler.removeCallbacks(recoverCamera)
+    // The spot meter's thread goes with the view; it comes back on first use.
+    stopMeterThread()
     if (current === this) current = null
   }
 
@@ -2360,6 +2539,18 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       "congested" to stream.getStreamClient().hasCongestion(),
     )
     post { runCatching { onBitrate(event) } }
+    /**
+     * The full readout, on the same tick. Built here for the same reason the
+     * bitrate event is, and caught, because [stats] reads the stream client
+     * and the GL interface and either can throw mid-teardown - on a library
+     * thread with nothing above it.
+     *
+     * Only while streaming: this tick is the stream client's, and it does not
+     * run for an off-air recording. `stats()` is still there for a screen that
+     * wants the numbers when nothing is live.
+     */
+    val statsEvent = runCatching { stats() }.getOrNull() ?: return
+    post { runCatching { onStats(statsEvent) } }
   }
 
   /**
@@ -2479,8 +2670,25 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     /** Long enough for a working microphone to have produced many buffers. */
     private const val SILENCE_CHECK_MS = 2_500L
 
-    /** A level meter that moves faster than this is not readable anyway. */
-    private const val LEVEL_INTERVAL_MS = 100L
+    /**
+     * How often `onLevel` goes to JavaScript, in milliseconds; 0 for never.
+     *
+     * A quarter of a second by default, down from a tenth. The meter on screen
+     * is drawn natively now and does not need the event at all; what is left
+     * reading it in JavaScript is a diagnostic and a fallback, and neither is
+     * worth ten crossings a second of a thread that freezes first. JavaScript
+     * asks for 100 through `setLevelEventInterval` when it really is drawing
+     * from it.
+     *
+     * On the companion rather than the view so that it survives the view: the
+     * screen sets it once, and the preview is torn down and rebuilt by every
+     * tab change. Volatile because it is written from the module's thread and
+     * read on the audio thread.
+     */
+    @Volatile
+    internal var levelEventIntervalMs = DEFAULT_LEVEL_INTERVAL_MS
+
+    internal const val DEFAULT_LEVEL_INTERVAL_MS = 250L
 
     /** The preview currently mounted, if any. See the note on the class. */
     var current: BroadcasterView? = null

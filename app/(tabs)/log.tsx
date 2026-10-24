@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { memo, useEffect, useState } from "react";
+import { FlatList, Pressable, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Text } from "@/components/ui/text";
@@ -23,7 +23,26 @@ export default function LogScreen() {
   const router = useRouter();
   const [entries, setEntries] = useState<LogEntry[]>(() => readLog());
 
-  useEffect(() => subscribeLog(() => setEntries(readLog())), []);
+  /**
+   * At most once a second, trailing. Tabs never unmount, so once this screen
+   * has been opened it stays subscribed for the life of the app - and a
+   * congested broadcast logs several lines a second, each of which re-read and
+   * re-rendered the whole list on the JS thread the encoder's callbacks share.
+   */
+  useEffect(() => {
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribeLog(() => {
+      if (pending) return;
+      pending = setTimeout(() => {
+        pending = undefined;
+        setEntries(readLog());
+      }, REFRESH_MS);
+    });
+    return () => {
+      unsubscribe();
+      if (pending) clearTimeout(pending);
+    };
+  }, []);
 
   const [sent, setSent] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -74,7 +93,12 @@ export default function LogScreen() {
           accessibilityRole="button"
           accessibilityLabel="Clear the log"
           accessibilityState={{ disabled: entries.length === 0 }}
-          onPress={clearLog}
+          // Emptied here as well, rather than a second later when the
+          // throttled subscription catches up.
+          onPress={() => {
+            clearLog();
+            setEntries([]);
+          }}
           hitSlop={8}
           disabled={entries.length === 0}
           className="min-h-11 justify-center pl-2"
@@ -95,22 +119,52 @@ export default function LogScreen() {
           </Text>
         </View>
       ) : (
-        <ScrollView className="flex-1" contentContainerClassName="p-4 gap-2 pb-12">
-          <Text className="pb-1 text-xs text-muted-foreground">
-            {entries.length} {entries.length === 1 ? "line" : "lines"}, newest first. Kept on
-            this phone until you clear it. Send puts the latest 300 in the studio.
-          </Text>
-          {sent ? <Text className="pb-1 text-xs">{sent}</Text> : null}
-          {entries.map((entry, index) => (
-            <Row key={`${entry.at}-${index}`} entry={entry} />
-          ))}
-        </ScrollView>
+        <FlatList
+          className="flex-1"
+          contentContainerClassName="p-4 gap-2 pb-12"
+          data={entries}
+          keyExtractor={keyOf}
+          renderItem={renderRow}
+          // Only what is on screen and a little either side: the list is read
+          // from the top, and 400 mounted rows were 400 rows to diff per line.
+          initialNumToRender={20}
+          maxToRenderPerBatch={20}
+          windowSize={5}
+          ListHeaderComponent={
+            <View className="gap-2">
+              <Text className="pb-1 text-xs text-muted-foreground">
+                {entries.length} {entries.length === 1 ? "line" : "lines"}, newest first. Kept on
+                this phone until you clear it. Send puts the latest 300 in the studio.
+              </Text>
+              {sent ? <Text className="pb-1 text-xs">{sent}</Text> : null}
+            </View>
+          }
+        />
       )}
     </SafeAreaView>
   );
 }
 
-function Row({ entry }: { entry: LogEntry }) {
+/** How often an open log screen catches up with new lines. */
+const REFRESH_MS = 1000;
+
+/**
+ * Timestamp and message rather than position: the list is newest first, so
+ * every new line shifts every index, and an index key re-mounts every row.
+ * Two identical lines in the same millisecond share a key, which costs a
+ * warning in development and nothing a reader would see.
+ */
+function keyOf(entry: LogEntry): string {
+  return `${entry.at}-${entry.level}-${entry.message}`;
+}
+
+function renderRow({ item }: { item: LogEntry }) {
+  return <Row entry={item} />;
+}
+
+// Memoised so a refresh re-renders only the rows that are new; the entry
+// objects themselves never change once logged.
+const Row = memo(function Row({ entry }: { entry: LogEntry }) {
   return (
     <View className="flex-row gap-3 rounded-xl border border-border bg-card px-3 py-2">
       <Text className="font-mono text-xs text-muted-foreground">{clock(entry.at)}</Text>
@@ -122,7 +176,7 @@ function Row({ entry }: { entry: LogEntry }) {
       </View>
     </View>
   );
-}
+});
 
 /**
  * Error is the app's own destructive colour so it reads the same as every other

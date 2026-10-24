@@ -1,4 +1,4 @@
-import type { ViewProps } from "react-native";
+import type { StyleProp, ViewProps, ViewStyle } from "react-native";
 
 /** What the encoder is doing, as reported by the native connection callbacks. */
 export type BroadcastState =
@@ -31,7 +31,12 @@ export type BitrateEvent = {
   congested: boolean;
 };
 
-/** Peak microphone amplitude, 0-100, ten times a second. */
+/**
+ * Peak microphone amplitude, 0-100: the loudest buffer since the last event.
+ * Every 250 ms by default; `setLevelEventInterval` changes that, and 0 stops
+ * the event. The on-screen meter should be `LevelMeterView`, which draws the
+ * level natively and does not depend on this event at all.
+ */
 export type LevelEvent = { peak: number; muted: boolean };
 
 export type CameraFacing = "front" | "back" | "external" | "unknown";
@@ -332,6 +337,26 @@ export type BroadcastStats = {
   videoMuted: boolean;
 };
 
+/**
+ * The same numbers `stats()` returns, pushed once a second while streaming -
+ * from the encoder's own bitrate tick, so it stops when the stream does. Use
+ * this rather than polling `stats()`: a synchronous native call blocks the
+ * JavaScript thread for its whole round trip.
+ */
+export type StatsEvent = BroadcastStats;
+
+/**
+ * The native microphone level meter. It reads the level straight from the
+ * microphone on the native side, so it keeps moving however busy JavaScript
+ * is. Size it with `style` (the JavaScript meter it replaces was 16 wide by
+ * 129 tall); the segments are divided out of whatever it is given.
+ */
+export type LevelMeterViewProps = {
+  /** The whole meter fades while muted, so muted never reads as a dead microphone. */
+  muted?: boolean;
+  style?: StyleProp<ViewStyle>;
+};
+
 export type BroadcasterViewProps = ViewProps & {
   onStatus?: (event: { nativeEvent: StatusEvent }) => void;
   onBitrate?: (event: { nativeEvent: BitrateEvent }) => void;
@@ -342,4 +367,5 @@ export type BroadcasterViewProps = ViewProps & {
   onRecord?: (event: { nativeEvent: RecordEvent }) => void;
   onAudioInterrupted?: (event: { nativeEvent: AudioInterruptedEvent }) => void;
   onThermal?: (event: { nativeEvent: ThermalEvent }) => void;
+  onStats?: (event: { nativeEvent: StatsEvent }) => void;
 };

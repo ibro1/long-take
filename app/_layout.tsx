@@ -8,6 +8,7 @@ import * as React from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { PortalHost } from "@/components/primitives/portal";
 import { UpdatePrompt, UpdateProvider } from "@/components/updates/update-prompt";
+import { PerfProbe } from "@/components/diagnostics/perf-probe";
 import { setAndroidNavigationBar } from "@/lib/android-navigation-bar";
 import { DARK_THEME, LIGHT_THEME } from "@/lib/constants";
 import { useColorScheme } from "@/lib/useColorScheme";
@@ -119,6 +120,9 @@ export default function RootLayout() {
               {/* Floats over whatever screen is up, and only ever when an
                   update is downloaded and the phone is not on air. */}
               <UpdatePrompt />
+              {/* Draws nothing; records performance when About's hidden
+                  switch is on, and does nothing at all when it is off. */}
+              <PerfProbe />
             </UpdateProvider>
           </BottomSheetModalProvider>
         </GestureHandlerRootView>

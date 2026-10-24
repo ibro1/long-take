@@ -1,10 +1,9 @@
 import { useEffect, useRef } from "react";
 
-import type { BroadcastStats } from "@/modules/framevane-broadcaster";
-
 import { buildHealthReport } from "./health";
 import { pushLog } from "./log";
 import { postHealth } from "./overlays";
+import { readReadouts } from "./readouts";
 import type { Connection } from "./types";
 
 /**
@@ -23,7 +22,6 @@ type Inputs = {
   state: string;
   thermal: number;
   charge: { level: number; charging: boolean };
-  stats: BroadcastStats | null;
   reconnects: number;
   lastDrop: string;
 };
@@ -32,9 +30,9 @@ type Inputs = {
  * Tells the studio how the phone is doing, for as long as it is live.
  *
  * It reads the latest values through a ref instead of re-subscribing on every
- * change. `stats` is a new object every second, and an effect that depended on
- * it would tear its timer down and rebuild it each time - sending on every
- * tick instead of every fifteen seconds, which is the opposite of the point.
+ * change, and the encoder's stats straight from the readouts store at the
+ * moment of sending: they change every second, and neither this timer nor the
+ * screen around it should be woken for that.
  *
  * A change in the thermal state is sent at once rather than waiting for the
  * next beat: a phone that has just got hot is exactly the report the studio
@@ -49,7 +47,8 @@ export function useHealthHeartbeat(inputs: Inputs): void {
   const sending = useRef(false);
 
   const send = useRef(async () => {
-    const { connection, state, thermal, charge, stats, reconnects, lastDrop } = latest.current;
+    const { connection, state, thermal, charge, reconnects, lastDrop } = latest.current;
+    const { stats } = readReadouts();
     // One in flight at a time: a slow network must not queue reports behind it.
     if (!connection || sending.current) return;
     sending.current = true;

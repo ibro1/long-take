@@ -1,5 +1,6 @@
 import { requireNativeModule, requireNativeView } from "expo";
 import type * as React from "react";
+import { Platform } from "react-native";
 
 import type {
   AudioDevice,
@@ -17,6 +18,7 @@ import type {
   CodecSupport,
   EncoderSettings,
   LevelEvent,
+  LevelMeterViewProps,
   LogEntry,
   LogEvent,
   LogLevel,
@@ -28,6 +30,7 @@ import type {
   StorageState,
   ThermalEvent,
   SrtOptions,
+  StatsEvent,
   StatusEvent,
   VideoCodec,
 } from "./src/types";
@@ -48,6 +51,7 @@ export type {
   CodecSupport,
   EncoderSettings,
   LevelEvent,
+  LevelMeterViewProps,
   LogEntry,
   LogEvent,
   LogLevel,
@@ -59,6 +63,7 @@ export type {
   StorageState,
   ThermalEvent,
   SrtOptions,
+  StatsEvent,
   StatusEvent,
   VideoCodec,
 };
@@ -70,6 +75,28 @@ export type {
  */
 export const BroadcasterView: React.ComponentType<BroadcasterViewProps> =
   requireNativeView("FramevaneBroadcaster");
+
+/**
+ * The microphone level meter, drawn natively - or null where there is none.
+ *
+ * Null on iOS, which has no native meter yet, and on an Android dev client
+ * built before the view existed. Both are asked rather than assumed: rendering
+ * a native view the installed app does not have fails at render time, deep in
+ * the renderer, with nothing naming the cause. So the caller checks for null
+ * and keeps the JavaScript meter as the fallback.
+ *
+ * The config lookup is the same one `requireNativeView` makes on first render
+ * (expo-modules-core's `getViewConfig`), done up front so the answer is known
+ * before anything is mounted.
+ */
+const expoGlobal = (globalThis as {
+  expo?: { getViewConfig?: (moduleName: string, viewName?: string) => unknown };
+}).expo;
+
+export const LevelMeterView: React.ComponentType<LevelMeterViewProps> | null =
+  Platform.OS === "android" && expoGlobal?.getViewConfig?.("FramevaneBroadcaster", "LevelMeterView")
+    ? requireNativeView<LevelMeterViewProps>("FramevaneBroadcaster", "LevelMeterView")
+    : null;
 
 const nativeModule = requireNativeModule("FramevaneBroadcaster");
 
@@ -154,12 +181,30 @@ export function isStreaming(): boolean {
 }
 
 /**
- * What the socket is doing. Read it on a timer while live: a stream reports its
- * target bitrate right up until the moment it stalls, and the queue is what
- * says the uplink is losing.
+ * What the socket is doing: a stream reports its target bitrate right up until
+ * the moment it stalls, and the queue is what says the uplink is losing.
+ *
+ * While live, prefer the view's `onStats` event, which pushes this same map
+ * once a second. This call is synchronous and blocks the JavaScript thread for
+ * the round trip; it is kept for a one-off read and for when nothing is live.
  */
 export function stats(): BroadcastStats {
   return native.stats();
+}
+
+/**
+ * How often the view's `onLevel` event fires, in milliseconds. 250 by default;
+ * 0 stops it; anything else is held between 50 and 10000. Raise it to 100 only
+ * while JavaScript is actually drawing the level - `LevelMeterView` does not
+ * need the event.
+ *
+ * Feature-detected like `sampleLuma`, so a dev client that predates it keeps
+ * its old fixed rate rather than throwing through the dev proxy.
+ */
+export function setLevelEventInterval(ms: number): void {
+  const fn = (nativeModule as Record<string, unknown>).setLevelEventInterval;
+  if (typeof fn !== "function") return;
+  native.setLevelEventInterval(Math.round(ms));
 }
 
 /**

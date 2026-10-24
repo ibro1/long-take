@@ -124,7 +124,35 @@ class BroadcasterModule : Module() {
         "onRecord",
         "onAudioInterrupted",
         "onThermal",
+        "onStats",
       )
+    }
+
+    /**
+     * The microphone level, drawn natively. See [LevelMeterView] for why it is
+     * not drawn by JavaScript any more.
+     *
+     * A second View on the same module rather than a module of its own:
+     * expo-modules-core (SDK 54) keys each View by its name and exports it as
+     * `ViewManagerAdapter_FramevaneBroadcaster_LevelMeterView`, which
+     * JavaScript reaches with
+     * `requireNativeView("FramevaneBroadcaster", "LevelMeterView")`. The first
+     * View declared stays the module's default, so `BroadcasterView` - which
+     * JavaScript requires with no name - is unchanged. Keep it first.
+     *
+     * Named explicitly: the default is the class's simple name, and in a
+     * minified build that is whatever R8 renamed it to, which JavaScript
+     * would never find.
+     *
+     * The level itself never crosses the bridge: the view subscribes to
+     * [LevelBus] while it is attached. `muted` is the only prop, because a mute
+     * is a tap and a tap is rare.
+     */
+    View(LevelMeterView::class) {
+      Name("LevelMeterView")
+      // Nullable so that a prop JavaScript stops passing reads as unmuted
+      // rather than failing the conversion.
+      Prop("muted") { view: LevelMeterView, muted: Boolean? -> view.muted = muted ?: false }
     }
 
     /**
@@ -314,6 +342,23 @@ class BroadcasterModule : Module() {
      * it stalls.
      */
     Function("stats") { BroadcasterView.current?.stats() ?: idleStats() }
+
+    /**
+     * How often `onLevel` reaches JavaScript, in milliseconds; 0 stops it.
+     *
+     * A quarter of a second by default. The level on screen is drawn by the
+     * native meter now, and every event is work on the JavaScript thread -
+     * which is the thread that freezes first an hour into a broadcast. A
+     * screen still drawing the level in JavaScript asks for 100 here.
+     *
+     * Floored at 50: below that the event is more often than the audio thread
+     * produces buffers on some phones, which buys nothing and costs the
+     * thread this exists to spare. Capped at ten seconds, which is already
+     * past any use as a level.
+     */
+    Function("setLevelEventInterval") { ms: Int ->
+      BroadcasterView.levelEventIntervalMs = if (ms <= 0) 0L else ms.coerceIn(50, 10_000).toLong()
+    }
 
     /**
      * Changing the bitrate of a running encoder IS safe, unlike resolution -

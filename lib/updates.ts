@@ -40,8 +40,15 @@ export type UpdatePrompt = {
 /** Long enough that returning to the app repeatedly is not a network habit. */
 const RECHECK_AFTER_MS = 5 * 60 * 1000;
 
-/** How often to look at whether the broadcast we are waiting on has ended. */
-const BROADCAST_POLL_MS = 2_000;
+/**
+ * How often to look at whether the broadcast we are waiting on has ended.
+ *
+ * A minute, not two seconds. Nobody is waiting on the answer - the prompt only
+ * appears once the operator is off air, and a minute's delay after a class is
+ * invisible - while a two-second timer was a JS wake-up and two native calls
+ * thirty times a minute for the whole of a broadcast.
+ */
+const BROADCAST_POLL_MS = 60_000;
 
 /**
  * The camera, the encoder and the first render all want the phone at once on
