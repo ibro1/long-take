@@ -51,14 +51,14 @@ export function LevelMeter({ muted }: { muted: boolean }) {
             <View
               key={index}
               className={`h-2 w-4 rounded-[2px] ${
-                on ? (position > HOT ? "bg-red-500" : "bg-green-500") : "bg-white/20"
+                on ? (position > HOT ? "bg-filmic-alert" : "bg-filmic-good") : "bg-filmic-line"
               }`}
             />
           );
         })}
       </View>
       {muted ? (
-        <Text className="text-[10px] font-semibold uppercase text-red-400">Muted</Text>
+        <Text className="text-[10px] font-semibold uppercase text-filmic-alert">Muted</Text>
       ) : null}
     </View>
   );

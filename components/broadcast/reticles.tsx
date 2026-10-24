@@ -3,6 +3,7 @@ import { type LayoutChangeEvent, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 
 import { Text } from "@/components/ui/text";
+import { filmic } from "@/lib/theme/filmic";
 
 import { ExposureIcon, FocusIcon, LockedIcon } from "./icons";
 
@@ -212,10 +213,10 @@ export function Reticles({
                 bottom: 0,
                 borderRadius: 10,
                 borderWidth: 1.5,
-                borderColor: focusLocked ? "#FCD34D" : "rgba(255,255,255,0.92)",
+                borderColor: focusLocked ? filmic.color.accent : "rgba(244,245,247,0.92)",
               }}
             />
-            <FocusIcon className={focusLocked ? "h-4 w-4 text-amber-300" : "h-4 w-4 text-white/90"} />
+            <FocusIcon className={focusLocked ? "h-4 w-4 text-filmic-accent" : "h-4 w-4 text-filmic-ink/90"} />
             <View style={{ position: "absolute", bottom: -16 }}>
               <Badge text={focusLocked ? "AF·L" : "AF"} locked={focusLocked} />
             </View>
@@ -245,14 +246,14 @@ export function Reticles({
                 bottom: 0,
                 borderRadius: EXPO_SIZE / 2,
                 borderWidth: 2,
-                borderColor: exposureLocked ? "#FCD34D" : "rgba(255,255,255,0.95)",
-                backgroundColor: "rgba(0,0,0,0.22)",
+                borderColor: exposureLocked ? filmic.color.accent : "rgba(244,245,247,0.95)",
+                backgroundColor: "rgba(12,13,17,0.28)",
               }}
             />
             {exposureLocked ? (
-              <LockedIcon className="h-4 w-4 text-amber-300" />
+              <LockedIcon className="h-4 w-4 text-filmic-accent" />
             ) : (
-              <ExposureIcon className="h-5 w-5 text-white" />
+              <ExposureIcon className="h-5 w-5 text-filmic-ink" />
             )}
             <View style={{ position: "absolute", bottom: -16 }}>
               <Badge text={exposureLocked ? "AE·L" : "AE"} locked={exposureLocked} />
@@ -266,10 +267,10 @@ export function Reticles({
 
 function Badge({ text, locked }: { readonly text: string; readonly locked: boolean }) {
   return (
-    <View className="rounded bg-black/60 px-1.5 py-0.5">
+    <View className="rounded px-1.5 py-0.5" style={{ backgroundColor: filmic.color.panel }}>
       <Text
         className={`text-[9px] font-semibold uppercase tracking-wide ${
-          locked ? "text-amber-300" : "text-white/90"
+          locked ? "text-filmic-accent" : "text-filmic-ink/90"
         }`}
       >
         {text}

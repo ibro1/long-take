@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 export function Mono({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <Text
-      className={cn("font-mono text-white", className)}
+      className={cn("font-mono text-filmic-ink", className)}
       // The head-up cap (chrome.tsx's HUD_TEXT), written out rather than
       // imported because chrome imports this file.
       maxFontSizeMultiplier={1.3}

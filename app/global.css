@@ -25,25 +25,28 @@
     --ring: 240 5.9% 10%;
   }
 
+  /* Filmic dark: a deeper, cooler near-black than the shadcn default, with
+     denser surface separation and an amber focus ring. Tuned to match the
+     camera chrome's filmic.* tokens so settings and viewfinder read as one app. */
   .dark:root {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 72% 51%;
+    --background: 228 16% 6%;
+    --foreground: 220 16% 96%;
+    --card: 227 14% 9%;
+    --card-foreground: 220 16% 96%;
+    --popover: 227 14% 9%;
+    --popover-foreground: 220 16% 96%;
+    --primary: 220 16% 96%;
+    --primary-foreground: 227 14% 9%;
+    --secondary: 225 12% 15%;
+    --secondary-foreground: 220 16% 96%;
+    --muted: 225 12% 14%;
+    --muted-foreground: 223 10% 64%;
+    --accent: 225 12% 16%;
+    --accent-foreground: 220 16% 96%;
+    --destructive: 4 90% 58%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --border: 225 11% 17%;
+    --input: 225 11% 17%;
+    --ring: 40 90% 56%;
   }
 }

@@ -97,7 +97,7 @@ export function Page({
   return (
     <SafeAreaView className="flex-1 bg-background" edges={["top", "bottom"]}>
       <Stack.Screen options={NO_NATIVE_HEADER} />
-      <View className="flex-row items-center gap-2 border-b border-border px-3 py-2">
+      <View className="flex-row items-center gap-2 border-b border-hairline border-border px-3 py-2">
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back"
@@ -110,7 +110,7 @@ export function Page({
         <Text className="flex-1 text-lg font-semibold">{title}</Text>
         {action}
       </View>
-      <ScrollView className="flex-1" contentContainerClassName="gap-6 p-4 pb-16">
+      <ScrollView className="flex-1" contentContainerClassName="gap-5 p-4 pb-16">
         {intro ? <Text className="px-1 text-sm text-muted-foreground">{intro}</Text> : null}
         {children}
       </ScrollView>
@@ -145,16 +145,16 @@ export function Group({
       {title || note ? (
         <View className="gap-1 px-1">
           {title ? (
-            <Text className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <Text className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
               {title}
             </Text>
           ) : null}
           {note ? <Text className="text-xs text-muted-foreground">{note}</Text> : null}
         </View>
       ) : null}
-      <View className="overflow-hidden rounded-2xl border border-border bg-card">
+      <View className="overflow-hidden rounded-xl border border-hairline border-border bg-card">
         {rows.map((row, index) => (
-          <View key={row.key} className={index === 0 ? undefined : "border-t border-border"}>
+          <View key={row.key} className={index === 0 ? undefined : "border-t border-hairline border-border"}>
             {row}
           </View>
         ))}
@@ -197,7 +197,7 @@ export function NavRow({
       accessibilityLabel={value ? `${label}, ${value}` : label}
       accessibilityHint={detail}
       onPress={onPress}
-      className="min-h-[56px] flex-row items-center gap-3 px-4 py-3 active:opacity-60"
+      className="min-h-[56px] flex-row items-center gap-3 px-4 py-2.5 active:opacity-60"
     >
       <View className="flex-1 gap-0.5">
         <Text className="text-sm font-medium">{label}</Text>
@@ -240,14 +240,14 @@ export function SwitchRow({
       accessibilityHint={detail}
       accessibilityState={{ checked: on }}
       onPress={onPress}
-      className="min-h-[56px] flex-row items-center gap-4 px-4 py-3 active:opacity-60"
+      className="min-h-[56px] flex-row items-center gap-4 px-4 py-2.5 active:opacity-60"
     >
       <View className="flex-1 gap-0.5">
         <Text className="text-sm font-medium">{label}</Text>
         {detail ? <Text className="text-xs text-muted-foreground">{detail}</Text> : null}
       </View>
       <View
-        className={`h-7 w-12 justify-center rounded-full px-0.5 ${on ? "bg-foreground" : "bg-muted"}`}
+        className={`h-7 w-12 justify-center rounded-full px-0.5 ${on ? "bg-filmic-accent" : "bg-muted"}`}
       >
         <View className={`h-6 w-6 rounded-full bg-background ${on ? "self-end" : "self-start"}`} />
       </View>
@@ -274,7 +274,7 @@ export function ChoiceRow<T extends string | number>({
   onChange: (value: T) => void;
 }) {
   return (
-    <View className="gap-2 px-4 py-3">
+    <View className="gap-2 px-4 py-2.5">
       <Text className="text-sm font-medium">{label}</Text>
       <View className="flex-row flex-wrap gap-2">
         {options.map((option) => {
@@ -289,11 +289,11 @@ export function ChoiceRow<T extends string | number>({
               accessibilityState={{ selected }}
               onPress={() => onChange(option.value)}
               className={`min-h-[44px] justify-center rounded-full border px-4 ${
-                selected ? "border-foreground bg-foreground" : "border-border"
+                selected ? "border-filmic-accent bg-filmic-accent" : "border-hairline border-border"
               }`}
             >
               <Text
-                className={`text-sm ${selected ? "font-semibold text-background" : "text-foreground"}`}
+                className={`text-sm ${selected ? "font-semibold text-filmic-accentink" : "text-foreground"}`}
               >
                 {option.label}
               </Text>
@@ -308,9 +308,9 @@ export function ChoiceRow<T extends string | number>({
 /** A fact about the app or the phone, not something to be changed. */
 export function ReadoutRow({ label, value }: { label: string; value: string }) {
   return (
-    <View className="min-h-[44px] flex-row items-center justify-between gap-3 px-4 py-3">
+    <View className="min-h-[44px] flex-row items-center justify-between gap-3 px-4 py-2.5">
       <Text className="text-sm text-muted-foreground">{label}</Text>
-      <Text className="shrink font-mono text-sm" numberOfLines={1}>
+      <Text className="shrink font-mono text-sm tracking-tight" numberOfLines={1}>
         {value}
       </Text>
     </View>
@@ -319,5 +319,5 @@ export function ReadoutRow({ label, value }: { label: string; value: string }) {
 
 /** Anything a row shape does not fit: a file with a delete, a warning. */
 export function Block({ children }: { children: ReactNode }) {
-  return <View className="gap-1.5 px-4 py-3">{children}</View>;
+  return <View className="gap-1.5 px-4 py-2.5">{children}</View>;
 }

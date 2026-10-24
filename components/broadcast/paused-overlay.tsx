@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Animated, View } from "react-native";
 
 import { Text } from "@/components/ui/text";
+import { filmic } from "@/lib/theme/filmic";
 
 import { useReducedMotion } from "./connection-overlay";
 import { Mono } from "./mono";
@@ -19,8 +20,8 @@ import { t, textDir } from "@/lib/i18n";
  * frame, breathing, and a line that says what viewers are getting. A broadcast
  * paused by accident that nobody noticed is worse than one that stopped.
  */
-/** Tailwind's amber-400, the colour the pause controls already use. */
-const AMBER = "#fbbf24";
+/** The amber accent the pause controls already use for a held state. */
+const AMBER = filmic.color.accent;
 
 export function PausedOverlay({ live, seconds }: { live: boolean; seconds: number }) {
   const breath = useRef(new Animated.Value(0.5)).current;
@@ -62,19 +63,19 @@ export function PausedOverlay({ live, seconds }: { live: boolean; seconds: numbe
         }}
       />
       <Animated.View style={{ opacity: breath, alignItems: "center", gap: 4 }}>
-        <View className="rounded-xl bg-amber-400 px-5 py-2.5">
+        <View className="rounded-xl bg-filmic-accent px-5 py-2.5">
           <Text
             style={textDir()}
-            className="text-center text-xl font-bold uppercase tracking-wide text-black"
+            className="text-center text-xl font-bold uppercase tracking-wide text-filmic-accentink"
           >
             {t("overlay.paused")}
           </Text>
-          <Text style={textDir()} className="text-center text-xs text-black/80">
+          <Text style={textDir()} className="text-center text-xs text-filmic-accentink/80">
             {live ? t("overlay.pausedLive") : t("overlay.pausedIdle")}
           </Text>
         </View>
         {live ? (
-          <View className="rounded-full bg-black/70 px-3 py-1">
+          <View className="rounded-full bg-filmic-surface/80 px-3 py-1">
             <Mono className="text-xs">{t("overlay.pausedAt", { time: formatUptime(seconds) })}</Mono>
           </View>
         ) : null}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AccessibilityInfo, View } from "react-native";
 
 import { Text } from "@/components/ui/text";
+import { filmic } from "@/lib/theme/filmic";
 import { formatUptime } from "@/lib/broadcast/useBroadcast";
 import { t, textDir } from "@/lib/i18n";
 
@@ -23,10 +24,10 @@ import { Mono } from "./mono";
  * information. It also leaves nothing to switch off for reduced motion.
  */
 
-/** Tailwind's amber-400, the colour the pause already uses for "not normal". */
-const AMBER = "#fbbf24";
-/** Tailwind's red-500, the colour the failure banner is drawn in. */
-const RED = "#ef4444";
+/** The amber accent the pause already uses for "not normal". */
+const AMBER = filmic.color.accent;
+/** The air red the failure banner is drawn in. */
+const RED = filmic.color.alert;
 
 export function ReconnectingOverlay({ seconds }: { seconds: number }) {
   return (
@@ -47,19 +48,19 @@ export function ReconnectingOverlay({ seconds }: { seconds: number }) {
         accessibilityLiveRegion="assertive"
         accessibilityLabel={t("overlay.reconnectingA11y")}
       >
-        <View className="rounded-xl bg-amber-400 px-5 py-2.5">
+        <View className="rounded-xl bg-filmic-accent px-5 py-2.5">
           <Text
             style={textDir()}
-            className="text-center text-3xl font-bold uppercase tracking-wide text-black"
+            className="text-center text-3xl font-bold uppercase tracking-wide text-filmic-accentink"
           >
             {t("overlay.reconnecting")}
           </Text>
-          <Text style={textDir()} className="text-center text-xs text-black/80">
+          <Text style={textDir()} className="text-center text-xs text-filmic-accentink/80">
             {t("overlay.reconnectingBody")}
           </Text>
         </View>
         {seconds > 0 ? (
-          <View className="rounded-full bg-black/70 px-3 py-1">
+          <View className="rounded-full bg-filmic-surface/80 px-3 py-1">
             <Mono className="text-xs">{t("overlay.onAirFor", { time: formatUptime(seconds) })}</Mono>
           </View>
         ) : null}
@@ -83,17 +84,17 @@ export function OffAirOverlay() {
         }}
       />
       <View
-        className="rounded-xl bg-red-600 px-5 py-2.5"
+        className="rounded-xl bg-filmic-alert px-5 py-2.5"
         accessibilityLiveRegion="assertive"
         accessibilityLabel={t("overlay.offAirA11y")}
       >
         <Text
           style={textDir()}
-          className="text-center text-3xl font-bold uppercase tracking-wide text-white"
+          className="text-center text-3xl font-bold uppercase tracking-wide text-filmic-ink"
         >
           {t("overlay.offAir")}
         </Text>
-        <Text style={textDir()} className="text-center text-xs text-white/85">
+        <Text style={textDir()} className="text-center text-xs text-filmic-ink/85">
           {t("overlay.offAirBody")}
         </Text>
       </View>

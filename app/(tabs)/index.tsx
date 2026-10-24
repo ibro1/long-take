@@ -31,7 +31,7 @@ import {
 import { BatteryBar } from "@/components/broadcast/battery";
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { Reticles } from "@/components/broadcast/reticles";
-import { EdgeRails, type Rail } from "@/components/broadcast/edge-rails";
+import { ManualSliders } from "@/components/broadcast/manual-sliders";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
 import { plainFailure } from "@/lib/broadcast/failure";
@@ -767,12 +767,6 @@ export default function BroadcastScreen() {
     void toggleRecording();
   }, [guard, recording, toggleRecording]);
 
-  /**
-   * Which edge rail is open, if either. One at a time: two rails on one edge is
-   * a column the operator has to aim between, and the second would be over the
-   * picture.
-   */
-  const [rail, setRail] = useState<Rail>(null);
 
   // Display-only monitoring (focus peaking). The native side clears it on air;
   // this keeps the control in step and resets it when a broadcast starts.
@@ -1791,7 +1785,7 @@ export default function BroadcastScreen() {
           className="absolute inset-y-0 left-0 items-center justify-center"
           style={{ right: wide ? COLUMN : 0 }}
         >
-          <View className="h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-black/70">
+          <View className="h-28 w-28 items-center justify-center rounded-full border border-filmic-line bg-filmic-surface/80">
             <Mono className="text-6xl font-bold text-white">{counting}</Mono>
           </View>
           <Text
@@ -2021,18 +2015,16 @@ export default function BroadcastScreen() {
         </View>
 
         {/*
-          Zoom and focus, as rails rather than only as gestures. Pinch already
-          sets the zoom and a tap already sets the focus, and neither is enough
-          on a tripod: pinching needs two fingers on a phone that is clamped to
-          something, and a tap says where to look rather than how far.
-
-          Hidden while a panel is open, because a panel in landscape is a sheet
-          down this same edge and the two would be stacked on each other.
+          Zoom, focus and exposure as persistent Filmic sliders down the edge,
+          rather than only as gestures. Pinch sets the zoom and dragging a
+          reticle sets focus/metering, but neither is enough on a tripod:
+          pinching needs two hands on a clamped phone, and a slider says how far,
+          not just where. Hidden while a panel is open, because a panel in
+          landscape is a sheet down this same edge.
         */}
         {panel === null ? (
-          <EdgeRails
-            open={rail}
-            onOpen={setRail}
+          <ManualSliders
+            edge="left"
             canZoom={canZoom}
             zoom={zoom}
             zoomRange={zoomRange}
@@ -2043,18 +2035,12 @@ export default function BroadcastScreen() {
             manualFocus={manualFocus}
             onFocusDistance={setFocusDistance}
             onAutoFocus={resumeAutoFocus}
+            canExpose={canExpose}
+            exposure={exposure}
+            exposureRange={exposureRange}
+            onExposure={setExposure}
+            exposureLocked={exposureLocked}
           />
-        ) : null}
-
-        {/* The monitoring aids, as a pill above the bottom dock. Cleared and
-            disabled on air - a focusing help, not something that goes out. */}
-        {panel === null ? (
-          <View
-            pointerEvents="box-none"
-            style={{ position: "absolute", left: 0, right: 0, bottom: 120, alignItems: "center" }}
-          >
-            <MonitoringSelector value={monitor} onChange={applyMonitor} disabled={live} />
-          </View>
         ) : null}
 
         {/*
@@ -2080,19 +2066,38 @@ export default function BroadcastScreen() {
             hitSlop={4}
             style={{ position: "absolute", bottom: micBottom, left: 0, maxWidth: 104 }}
             className={`min-h-11 items-center justify-center rounded-full px-2 py-1.5 ${
-              panel === "mic" ? "bg-white" : "bg-black/70"
+              panel === "mic" ? "bg-filmic-ink" : "bg-filmic-surface/80"
             }`}
           >
             <Text
               numberOfLines={1}
               maxFontSizeMultiplier={HUD_TEXT}
-              className={`text-[10px] ${panel === "mic" ? "text-black" : "text-white"}`}
+              className={`text-[10px] ${panel === "mic" ? "text-filmic-accentink" : "text-filmic-ink"}`}
             >
               {t("mic.chip", { name: micLabel })}
             </Text>
           </Pressable>
         ) : null}
       </View>
+
+      {/* The monitoring aids, as a centred row along the bottom of the picture -
+          a scope row, clear of the left rail and (in landscape) the control
+          column. Cleared and disabled on air: a focusing help, not something
+          that goes out. */}
+      {panel === null ? (
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: wide ? COLUMN : 0,
+            bottom: wide ? 16 : 120,
+            alignItems: "center",
+          }}
+        >
+          <MonitoringSelector value={monitor} onChange={applyMonitor} disabled={live} />
+        </View>
+      ) : null}
 
       {/* In landscape a panel is a sheet down the leading side: dropping it at
           the bottom of the frame as portrait does would leave it two lines
@@ -2146,7 +2151,7 @@ export default function BroadcastScreen() {
               picture does behind it. */}
           <View
             pointerEvents="box-none"
-            className="h-full justify-center gap-3 bg-[#0E1319] px-3 py-3"
+            className="h-full justify-center gap-3 bg-filmic-surface px-3 py-3"
             style={{ width: COLUMN }}
           >
 
@@ -2191,7 +2196,7 @@ export default function BroadcastScreen() {
                   right and keeps its punctuation at the right end.
                 */}
                 <Text
-                  className={`flex-1 text-sm ${connection ? "text-white" : "text-amber-300"}`}
+                  className={`flex-1 text-sm ${connection ? "text-filmic-ink" : "text-filmic-accent"}`}
                   style={connection ? bidi(connection.name) : textDir()}
                   numberOfLines={2}
                   maxFontSizeMultiplier={HUD_TEXT}

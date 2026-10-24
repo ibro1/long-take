@@ -46,19 +46,19 @@ export const HUD_TEXT = 1.3;
 export type Tone = "plain" | "warn" | "alert";
 
 const ON_FILL: Record<Tone, string> = {
-  plain: "bg-white",
-  warn: "bg-amber-300",
-  alert: "bg-red-600",
+  plain: "bg-filmic-ink",
+  warn: "bg-filmic-accent",
+  alert: "bg-filmic-alert",
 };
 
 const ON_GLYPH: Record<Tone, string> = {
-  plain: "text-black",
-  warn: "text-black",
-  alert: "text-white",
+  plain: "text-filmic-accentink",
+  warn: "text-filmic-accentink",
+  alert: "text-filmic-ink",
 };
 
 /** Off: a dark disc with a hairline so its edge survives on a white subject. */
-const OFF_DISC = "bg-black/70 border border-white/15";
+const OFF_DISC = "bg-filmic-surface/80 border-hairline border-filmic-line";
 
 const DISC = {
   sm: "h-11 w-11",
@@ -149,12 +149,12 @@ export function ControlButton({
     >
       <View
         className={`items-center justify-center rounded-full ${DISC[size]} ${
-          disabled ? "bg-black/40 border border-white/10" : on ? ON_FILL[tone] : OFF_DISC
+          disabled ? "bg-filmic-surface/40 border-hairline border-filmic-line" : on ? ON_FILL[tone] : OFF_DISC
         }`}
       >
         <Icon
           className={`${GLYPH[size]} ${
-            disabled ? "text-white/30" : on ? ON_GLYPH[tone] : "text-white"
+            disabled ? "text-filmic-inkmuted" : on ? ON_GLYPH[tone] : "text-filmic-ink"
           }`}
         />
       </View>
@@ -163,7 +163,7 @@ export function ControlButton({
           numberOfLines={1}
           maxFontSizeMultiplier={HUD_TEXT}
           style={LABEL_SHADOW}
-          className={`text-[10px] font-medium ${disabled ? "text-white/40" : "text-white"}`}
+          className={`text-[10px] font-medium ${disabled ? "text-filmic-inkmuted" : "text-filmic-ink"}`}
         >
           {label}
         </Text>
@@ -193,8 +193,12 @@ export function PrimaryButton({
   onPress: () => void;
 }) {
   const fill =
-    mode === "stop" ? "bg-white" : mode === "start" ? "bg-red-600" : "bg-white/15 border border-white/25";
-  const ink = mode === "stop" ? "text-black" : "text-white";
+    mode === "stop"
+      ? "bg-filmic-ink"
+      : mode === "start"
+        ? "bg-filmic-alert"
+        : "bg-filmic-surface/80 border-hairline border-filmic-line";
+  const ink = mode === "stop" ? "text-filmic-accentink" : "text-filmic-ink";
 
   /**
    * The button's width is fixed by what sits beside it, so a long label is
@@ -208,7 +212,7 @@ export function PrimaryButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      className={`flex-row items-center justify-center gap-1.5 rounded-2xl ${
+      className={`flex-row items-center justify-center gap-1.5 rounded-xl ${
         compact ? "h-14 px-2" : "h-16 px-4"
       } ${fill}`}
     >
@@ -234,7 +238,7 @@ export function Chip({
   tone?: "plain" | "warn";
   className?: string;
 }) {
-  const fill = tone === "warn" ? "bg-amber-500/95" : "bg-black/70 border border-white/10";
+  const fill = tone === "warn" ? "bg-filmic-accent" : "bg-filmic-surface/80 border-hairline border-filmic-line";
   return (
     <View className={`flex-row items-center gap-1.5 rounded-full px-2.5 py-1 ${fill} ${className ?? ""}`}>
       {children}
@@ -264,8 +268,8 @@ export function DestinationChip({
       onPress={onPress}
       // Drawn small so it does not compete with the shutter; touched at full size.
       hitSlop={10}
-      className={`flex-row items-center gap-1.5 rounded-full border px-3 py-1.5 ${
-        name ? "border-white/15 bg-black/70" : "border-amber-300/60 bg-black/70"
+      className={`flex-row items-center gap-1.5 rounded-full border-hairline px-3 py-1.5 ${
+        name ? "border-filmic-line bg-filmic-surface/80" : "border-filmic-accent/60 bg-filmic-surface/80"
       } ${compact ? "" : "max-w-full self-center"}`}
     >
       {/* Two lines rather than one, and directed by the name's own first
@@ -276,13 +280,13 @@ export function DestinationChip({
         numberOfLines={2}
         maxFontSizeMultiplier={HUD_TEXT}
         style={name ? bidi(name) : textDir()}
-        className={`shrink text-xs ${name ? "text-white" : "font-semibold text-amber-200"}`}
+        className={`shrink text-xs ${name ? "text-filmic-ink" : "font-semibold text-filmic-accent"}`}
       >
         {name ?? t("destination.none")}
       </Text>
       {/* Never the thing that gives way. The name shrinks; the mark saying this
           opens something has to survive a long name. */}
-      <ChevronIcon className="h-3.5 w-3.5 shrink-0 text-white/70" />
+      <ChevronIcon className="h-3.5 w-3.5 shrink-0 text-filmic-inkmuted" />
     </Pressable>
   );
 }
@@ -326,11 +330,11 @@ export function Panel({
   const wide = width > height;
 
   return (
-    <View className="rounded-2xl bg-black/90">
+    <View className="rounded-xl bg-filmic-surface">
       <View className="flex-row items-center justify-between gap-2 pl-4 pr-2 pt-3 pb-1">
         <Text
           style={bidi(title)}
-          className="flex-1 text-xs font-semibold uppercase tracking-wide text-white/70"
+          className="flex-1 text-xs font-semibold uppercase tracking-wide text-filmic-inkmuted"
         >
           {title}
         </Text>
@@ -344,9 +348,9 @@ export function Panel({
           accessibilityLabel={t("common.close")}
           onPress={onClose}
           hitSlop={4}
-          className="h-10 w-10 items-center justify-center rounded-full bg-white/10"
+          className="h-10 w-10 items-center justify-center rounded-full bg-filmic-elevated"
         >
-          <CloseIcon className="h-4 w-4 text-white" />
+          <CloseIcon className="h-4 w-4 text-filmic-ink" />
         </Pressable>
       </View>
       <ScrollView
@@ -394,18 +398,18 @@ export function Row({
       accessibilityState={{ selected }}
       onPress={onPress}
       className={`min-h-11 flex-row items-center justify-between gap-2 rounded-xl px-3 py-2 ${
-        selected ? "bg-white" : "bg-white/10"
+        selected ? "bg-filmic-accent" : "bg-filmic-elevated"
       }`}
     >
       {/* Directed by its own words: rows carry names somebody typed - a
           preset, a microphone - as well as the app's own labels. */}
       <Text
         style={bidi(label)}
-        className={`flex-1 text-sm ${selected ? "font-semibold text-black" : "text-white"}`}
+        className={`flex-1 text-sm ${selected ? "font-semibold text-filmic-accentink" : "text-filmic-ink"}`}
       >
         {label}
       </Text>
-      <Text className={`text-xs font-semibold ${selected ? "text-black" : "text-white/70"}`}>
+      <Text className={`text-xs font-semibold ${selected ? "text-filmic-accentink" : "text-filmic-inkmuted"}`}>
         {hint ?? (selected ? "In use" : "")}
       </Text>
     </Pressable>
@@ -431,22 +435,22 @@ export function Toggle({
       accessibilityHint={hint}
       accessibilityState={{ checked: on }}
       onPress={onPress}
-      className="flex-row items-center justify-between rounded-xl bg-white/10 px-3 py-2.5"
+      className="flex-row items-center justify-between rounded-xl bg-filmic-elevated px-3 py-2.5"
     >
       <View className="flex-1 pr-3">
-        <Text style={bidi(label)} className="text-sm text-white">
+        <Text style={bidi(label)} className="text-sm text-filmic-ink">
           {label}
         </Text>
         {hint ? (
-          <Text style={bidi(hint)} className="text-xs text-white/70">
+          <Text style={bidi(hint)} className="text-xs text-filmic-inkmuted">
             {hint}
           </Text>
         ) : null}
       </View>
       <View
-        className={`h-7 w-12 justify-center rounded-full px-0.5 ${on ? "bg-white" : "bg-white/20"}`}
+        className={`h-7 w-12 justify-center rounded-full px-0.5 ${on ? "bg-filmic-accent" : "bg-filmic-line"}`}
       >
-        <View className={`h-6 w-6 rounded-full ${on ? "ml-auto bg-black" : "bg-white/70"}`} />
+        <View className={`h-6 w-6 rounded-full ${on ? "ml-auto bg-filmic-accentink" : "bg-filmic-inkmuted"}`} />
       </View>
     </Pressable>
   );
@@ -456,7 +460,7 @@ export function Toggle({
 export function Readout({ label, value }: { label: string; value: string }) {
   return (
     <View className="flex-row items-baseline justify-between gap-3">
-      <Text className="text-sm text-white/70">{label}</Text>
+      <Text className="text-sm text-filmic-inkmuted">{label}</Text>
       <Mono className="text-sm">{value}</Mono>
     </View>
   );
@@ -496,11 +500,14 @@ export function Banner({
   return (
     <View
       className={`flex-row items-start gap-2 rounded-xl p-3 ${
-        tone === "bad" ? "bg-red-600/95" : "bg-amber-500/95"
+        tone === "bad" ? "bg-filmic-alert" : "bg-filmic-accent"
       }`}
     >
       <View className="flex-1 gap-2">
-        <Text style={textDir()} className="text-sm text-white">
+        <Text
+          style={textDir()}
+          className={`text-sm ${tone === "bad" ? "text-filmic-ink" : "text-filmic-accentink"}`}
+        >
           {text}
         </Text>
         {action || secondary ? (
@@ -511,9 +518,9 @@ export function Banner({
                 accessibilityLabel={action.label}
                 onPress={action.onPress}
                 hitSlop={6}
-                className="min-h-9 justify-center self-start rounded-full bg-white px-3 py-1.5"
+                className="min-h-9 justify-center self-start rounded-full bg-filmic-ink px-3 py-1.5"
               >
-                <Text className="text-xs font-semibold text-black">{action.label}</Text>
+                <Text className="text-xs font-semibold text-filmic-accentink">{action.label}</Text>
               </Pressable>
             ) : null}
             {secondary ? (
@@ -522,9 +529,9 @@ export function Banner({
                 accessibilityLabel={secondary.label}
                 onPress={secondary.onPress}
                 hitSlop={6}
-                className="min-h-9 justify-center self-start rounded-full border border-white/80 px-3 py-1.5"
+                className="min-h-9 justify-center self-start rounded-full border-hairline border-filmic-ink/80 px-3 py-1.5"
               >
-                <Text className="text-xs font-semibold text-white">{secondary.label}</Text>
+                <Text className="text-xs font-semibold text-filmic-ink">{secondary.label}</Text>
               </Pressable>
             ) : null}
           </View>
@@ -536,9 +543,9 @@ export function Banner({
           accessibilityLabel={t("common.dismiss")}
           onPress={onDismiss}
           hitSlop={10}
-          className="h-8 w-8 items-center justify-center rounded-full active:bg-black/20"
+          className="h-8 w-8 items-center justify-center rounded-full active:bg-filmic-base/20"
         >
-          <Text className="text-base font-semibold text-white">×</Text>
+          <Text className="text-base font-semibold text-filmic-ink">×</Text>
         </Pressable>
       ) : null}
     </View>
@@ -581,19 +588,19 @@ export function ShutterButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      className={`${size} items-center justify-center rounded-full border-[3px] border-white active:opacity-80`}
+      className={`${size} items-center justify-center rounded-full border-[3px] border-filmic-ink active:opacity-80`}
     >
       {mode === "stop" ? (
         // A square inside the ring, which is stop everywhere a camera is.
-        <View className={`${compact ? "h-6 w-6" : "h-7 w-7"} rounded-[4px] bg-red-500`} />
+        <View className={`${compact ? "h-6 w-6" : "h-7 w-7"} rounded-[4px] bg-filmic-alert`} />
       ) : (
         <View
           className={`${inner} items-center justify-center rounded-full ${
-            mode === "blocked" ? "bg-white/20" : "bg-red-500"
+            mode === "blocked" ? "bg-filmic-surface/80" : "bg-filmic-alert"
           }`}
         >
           <Text
-            className={`text-center font-bold text-white ${compact ? "text-[10px]" : "text-xs"}`}
+            className={`text-center font-bold text-filmic-ink ${compact ? "text-[10px]" : "text-xs"}`}
             numberOfLines={2}
             maxFontSizeMultiplier={HUD_TEXT}
           >

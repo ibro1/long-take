@@ -28,7 +28,7 @@ const SPOKEN: Record<ChipWord, StringKey> = {
   unpublished: "studio.unpublishedA11y",
 };
 
-const DOT = { good: "bg-green-400", warn: "bg-black", plain: "bg-white/70" } as const;
+const DOT = { good: "bg-filmic-good", warn: "bg-filmic-accentink", plain: "bg-filmic-inkmuted" } as const;
 
 /**
  * "YouTube: live", beside the uptime.
@@ -59,7 +59,7 @@ export const StudioChip = memo(function StudioChip({ settled }: { settled: boole
             {index > 0 ? (
               <Text
                 maxFontSizeMultiplier={HUD_TEXT}
-                className={`text-xs ${warn ? "text-black/70" : "text-white/70"}`}
+                className={`text-xs ${warn ? "text-filmic-accentink/70" : "text-filmic-inkmuted"}`}
               >
                 ·
               </Text>
@@ -68,7 +68,7 @@ export const StudioChip = memo(function StudioChip({ settled }: { settled: boole
             <Text
               maxFontSizeMultiplier={HUD_TEXT}
               style={textDir()}
-              className={`text-xs font-semibold ${warn ? "text-black" : "text-white"}`}
+              className={`text-xs font-semibold ${warn ? "text-filmic-accentink" : "text-filmic-ink"}`}
             >
               {chip.name}: {t(WORD[chip.word])}
             </Text>

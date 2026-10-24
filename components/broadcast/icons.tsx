@@ -1,9 +1,12 @@
 import {
+  AlignJustify,
   Camera,
   ChevronLeft,
   ChevronRight,
   CircleDot,
   Crop,
+  EyeOff,
+  Focus,
   Gauge,
   Globe,
   Image,
@@ -14,6 +17,7 @@ import {
   Mic,
   MicOff,
   MoreVertical,
+  Palette,
   Pause,
   Play,
   Radio,
@@ -64,6 +68,10 @@ function withClassName(...icons: LucideIcon[]) {
 }
 
 withClassName(
+  AlignJustify,
+  EyeOff,
+  Focus,
+  Palette,
   Camera,
   Crosshair,
   Search,
@@ -134,4 +142,12 @@ export {
   X as CloseIcon,
   Zap as TorchIcon,
   ZapOff as TorchOffIcon,
+  /** Monitoring off: no aid drawn on the picture. */
+  EyeOff as MonitorOffIcon,
+  /** Focus peaking: the sharp plane outlined. */
+  Focus as PeakingIcon,
+  /** Zebras: diagonal stripes over blown highlights. */
+  AlignJustify as ZebraIcon,
+  /** False colour: exposure mapped to a palette. */
+  Palette as FalseColorIcon,
 };

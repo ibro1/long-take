@@ -1,22 +1,29 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
+import { Text } from "@/components/ui/text";
+import { filmic } from "@/lib/theme/filmic";
 import type { MonitorMode } from "@/modules/framevane-broadcaster";
 
+import { FalseColorIcon, MonitorOffIcon, PeakingIcon, ZebraIcon } from "./icons";
+
 /**
- * The display-only monitoring aids, as a segmented pill over the picture - the
- * scope row from the camera-monitoring design. Only the modes that exist
- * natively appear; zebras and false colour join as those filters land.
+ * The display-only monitoring aids, as a Filmic-style icon scope row over the
+ * picture. Only the modes that exist natively appear.
  *
  * A monitoring aid is a framing/focusing help, not broadcast state, so the
- * active segment is neutral white, never the live green. Going on air clears
- * the aid (the native side does it), so the control is disabled while live and
- * says so.
+ * active segment is neutral white, never the live amber or green. Going on air
+ * clears the aid (the native side does it), so the control is disabled while
+ * live and says so.
  */
-const MODES: { mode: MonitorMode; label: string }[] = [
-  { mode: "off", label: "Off" },
-  { mode: "peaking", label: "Peak" },
-  { mode: "zebra", label: "Zebra" },
-  { mode: "falsecolor", label: "False" },
+const MODES: {
+  mode: MonitorMode;
+  label: string;
+  Icon: typeof MonitorOffIcon;
+}[] = [
+  { mode: "off", label: "Off", Icon: MonitorOffIcon },
+  { mode: "peaking", label: "Peaking", Icon: PeakingIcon },
+  { mode: "zebra", label: "Zebra", Icon: ZebraIcon },
+  { mode: "falsecolor", label: "False colour", Icon: FalseColorIcon },
 ];
 
 export function MonitoringSelector({
@@ -28,51 +35,62 @@ export function MonitoringSelector({
   readonly onChange: (mode: MonitorMode) => void;
   readonly disabled?: boolean;
 }) {
+  const current = MODES.find((m) => m.mode === value) ?? MODES[0];
   return (
-    <View pointerEvents="box-none" style={styles.wrap}>
+    <View style={styles.wrap} pointerEvents="box-none">
       <View style={[styles.pill, disabled && styles.pillDisabled]}>
-        {MODES.map(({ mode, label }) => {
+        {MODES.map(({ mode, label, Icon }) => {
           const active = value === mode;
+          const on = active && !disabled;
           return (
             <Pressable
               key={mode}
               disabled={disabled}
               onPress={() => onChange(mode)}
               accessibilityRole="button"
+              accessibilityLabel={label}
               accessibilityState={{ selected: active, disabled }}
-              style={[styles.segment, active && !disabled && styles.segmentActive]}
+              style={[styles.segment, on && styles.segmentActive]}
             >
-              <Text style={[styles.label, active && !disabled && styles.labelActive]}>
-                {label}
-              </Text>
+              <Icon
+                className={on ? "h-[18px] w-[18px] text-filmic-accentink" : "h-[18px] w-[18px] text-filmic-ink"}
+              />
             </Pressable>
           );
         })}
       </View>
-      {disabled ? <Text style={styles.offAir}>off on air</Text> : null}
+      {/* The active aid, named once below the strip - the icons carry it, the
+          word confirms it without crowding each segment. */}
+      <Text style={styles.caption}>{disabled ? "off on air" : current.label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { alignItems: "center", gap: 4 },
+  wrap: { alignItems: "center", gap: 3 },
   pill: {
     flexDirection: "row",
-    backgroundColor: "rgba(28,28,32,0.72)",
-    borderRadius: 999,
+    backgroundColor: filmic.color.panel,
+    borderRadius: filmic.radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: filmic.color.line,
     padding: 3,
+    gap: 2,
   },
   pillDisabled: { opacity: 0.45 },
   segment: {
-    minHeight: 44,
-    minWidth: 64,
-    paddingHorizontal: 16,
+    minHeight: 40,
+    minWidth: 48,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 999,
+    borderRadius: filmic.radius.pill,
   },
-  segmentActive: { backgroundColor: "#FAFAFA" },
-  label: { color: "#FAFAFA", fontSize: 14, fontWeight: "600" },
-  labelActive: { color: "#14101F" },
-  offAir: { color: "rgba(250,250,250,0.6)", fontSize: 11 },
+  segmentActive: { backgroundColor: filmic.color.ink },
+  caption: {
+    color: filmic.color.inkMuted,
+    fontSize: 10,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
 });

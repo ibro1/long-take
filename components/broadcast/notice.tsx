@@ -34,8 +34,8 @@ export function Notice({ text, at, tone }: { text: string; at: number; tone: "pl
       pointerEvents="none"
       style={{ opacity, alignItems: "center", paddingHorizontal: 16, paddingBottom: 4 }}
     >
-      <View className={`rounded-full px-3 py-1.5 ${tone === "bad" ? "bg-red-600" : "bg-black/70"}`}>
-        <Text className="text-xs text-white">{text}</Text>
+      <View className={`rounded-full px-3 py-1.5 ${tone === "bad" ? "bg-filmic-alert" : "bg-filmic-surface/80"}`}>
+        <Text className="text-xs text-filmic-ink">{text}</Text>
       </View>
     </Animated.View>
   );

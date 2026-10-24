@@ -24,16 +24,16 @@ export function BatteryBar({ level, charging }: { level: number; charging: boole
   // Charging is not a warning however little is in it - the situation is
   // already being dealt with, so it reads as ordinary.
   const fill = charging
-    ? "bg-green-400"
+    ? "bg-filmic-good"
     : clamped <= CRITICAL
-      ? "bg-red-500"
+      ? "bg-filmic-alert"
       : clamped <= LOW
-        ? "bg-amber-400"
-        : "bg-white";
+        ? "bg-filmic-accent"
+        : "bg-filmic-ink";
 
   return (
     <View className="flex-row items-center" accessibilityElementsHidden importantForAccessibility="no">
-      <View className="h-3 w-6 justify-center rounded-[3px] border border-white/70 p-[1.5px]">
+      <View className="h-3 w-6 justify-center rounded-[3px] border border-filmic-inkmuted p-[1.5px]">
         {/*
           A sliver is kept at the very bottom so the bar never reads as an empty
           outline, which looks like a missing reading rather than a flat battery.
@@ -44,7 +44,7 @@ export function BatteryBar({ level, charging }: { level: number; charging: boole
         />
       </View>
       {/* The terminal, which is what makes the rectangle a battery. */}
-      <View className="h-1.5 w-[2px] rounded-r-[1px] bg-white/70" />
+      <View className="h-1.5 w-[2px] rounded-r-[1px] bg-filmic-inkmuted" />
     </View>
   );
 }

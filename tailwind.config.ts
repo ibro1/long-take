@@ -42,6 +42,21 @@ export default {
           DEFAULT: "hsl(var(--card) / <alpha-value>)",
           foreground: "hsl(var(--card-foreground) / <alpha-value>)",
         },
+        // Filmic camera-chrome palette (mirrors lib/theme/filmic.ts). Solid
+        // values so `/opacity` modifiers still work; translucent panel fills
+        // stay inline in the components that need them.
+        filmic: {
+          base: "#0C0D11",
+          surface: "#121318",
+          elevated: "#1C1E25",
+          line: "#2A2D36",
+          ink: "#F4F5F7",
+          inkmuted: "#9BA0AC",
+          accent: "#F5B531",
+          accentink: "#141414",
+          alert: "#FF3B30",
+          good: "#34C759",
+        },
       },
       borderWidth: {
         hairline: hairlineWidth(),
