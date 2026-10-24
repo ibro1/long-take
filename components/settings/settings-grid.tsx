@@ -12,7 +12,7 @@ import {
 } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
-import { BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { BackHandler, Keyboard, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
 
 import ConnectionsScreen from "@/app/(tabs)/connections";
 import AboutPage from "@/app/settings/about";
@@ -195,6 +195,23 @@ export function SettingsGrid({
   const router = useRouter();
   const [stack, setStack] = useState<string[]>([]);
 
+  /**
+   * The keyboard, for the pages with fields (a destination's server and key).
+   * The app runs immersive, where Android often skips adjustResize, so the
+   * overlay measures how much of itself the keyboard really covers rather than
+   * trusting either the window or the keyboard height alone.
+   */
+  const [keyboard, setKeyboard] = useState(0);
+  const [overlayHeight, setOverlayHeight] = useState(height);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", (e) => setKeyboard(e.endCoordinates.height));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboard(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   // Every opening starts at the grid, or at the page it was opened for.
   useEffect(() => {
     setStack(open && openTo ? [openTo] : []);
@@ -237,9 +254,22 @@ export function SettingsGrid({
   // Square tiles where the screen allows, squeezed to fit a short landscape
   // screen with a margin, never shorter than a thumb.
   const tileHeight = Math.max(72, Math.min(panelWidth / 3, (height - 48) / 3));
+  // What of the keyboard overlaps this overlay (none if Android already resized
+  // the window around it), and the room left above it.
+  const covered = Math.max(0, keyboard - (height - overlayHeight));
+  const typing = keyboard > 0;
+  const pageHeight = typing
+    ? Math.max(120, Math.min(tileHeight * 3, overlayHeight - covered - 16))
+    : tileHeight * 3;
 
   return (
-    <View className="absolute inset-0 items-center justify-center" style={{ zIndex: 50 }}>
+    <View
+      className="absolute inset-0 items-center"
+      // Centred like Filmic's; pinned to the top while typing, so the field
+      // being typed into is above the keyboard rather than under it.
+      style={{ zIndex: 50, justifyContent: typing ? "flex-start" : "center", paddingTop: typing ? 8 : 0 }}
+      onLayout={(e) => setOverlayHeight(e.nativeEvent.layout.height)}
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Close settings"
@@ -271,7 +301,7 @@ export function SettingsGrid({
             }}
           />
         ) : (
-          <View style={{ height: tileHeight * 3, borderRadius: 16, overflow: "hidden" }}>
+          <View style={{ height: pageHeight, borderRadius: 16, overflow: "hidden" }}>
             <SettingsPanelContext.Provider value={nav}>
               {(() => {
                 const Current = allPages[stack.at(-1) ?? ""];
