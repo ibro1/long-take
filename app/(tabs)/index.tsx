@@ -2043,6 +2043,7 @@ export default function BroadcastScreen() {
       {panel === null && meterMode === "manual" ? (
         <ManualControls
           insets={reticleInsets}
+          leadWidth={wide ? lead : 0}
           fps={connection?.fps ?? 30}
           isoRange={capabilities?.manualSensor ? (capabilities?.isoRange ?? null) : null}
           exposureTimeRange={capabilities?.manualSensor ? (capabilities?.exposureTimeRange ?? null) : null}
@@ -2052,6 +2053,9 @@ export default function BroadcastScreen() {
           focusNear={capabilities?.focusNear ?? 0}
           focusDistance={focusDistance}
           onFocusDistance={setFocusDistance}
+          zoom={zoom}
+          zoomRange={zoomRange}
+          onZoom={setZoom}
         />
       ) : null}
       {panel === null && meterMode === "reticle" && (capabilities?.available ?? false) ? (

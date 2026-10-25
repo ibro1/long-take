@@ -202,15 +202,25 @@ function focusText(t: number): string {
   return r >= 100 ? "1.0" : `.${String(r).padStart(2, "0")}`;
 }
 
-type ExposureAxis = "lv" | "iso" | "s";
+type Axis = "lv" | "iso" | "s" | "z";
+const AXES: { axis: Axis; label: string; a11y: string }[] = [
+  { axis: "lv", label: "LV", a11y: "Light value" },
+  { axis: "iso", label: "ISO", a11y: "ISO" },
+  { axis: "s", label: "S", a11y: "Shutter" },
+  { axis: "z", label: "Z", a11y: "Zoom" },
+];
 
 /**
- * The exposure tape and the focus tape. Each tape reports a position 0..1
- * (1 at the top: brighter, or nearer) and this turns positions into camera
- * values and back, so the tapes stay where the camera actually is.
+ * Filmic's manual controls: a ruler down each edge of the picture that slides
+ * under a fixed amber index line at mid-height, with the value read beside the
+ * line. The left ruler is exposure or zoom - which one is picked on the wheel
+ * of LV / ISO / S / Z in the black column beside it - and the right is focus.
+ * Each ruler reports a position 0..1 and this turns positions into camera
+ * values and back, so the rulers stay where the camera actually is.
  */
 export function ManualControls({
   insets,
+  leadWidth,
   fps,
   isoRange,
   exposureTimeRange,
@@ -220,8 +230,13 @@ export function ManualControls({
   focusNear,
   focusDistance,
   onFocusDistance,
+  zoom,
+  zoomRange,
+  onZoom,
 }: {
   readonly insets: { left: number; right: number; top: number; bottom: number };
+  /** Width of the black column on the leading side, where the axis wheel sits. */
+  readonly leadWidth: number;
   readonly fps: number;
   readonly isoRange: Range | null;
   readonly exposureTimeRange: TimeRange | null;
@@ -232,14 +247,19 @@ export function ManualControls({
   readonly focusNear: number;
   readonly focusDistance: number;
   readonly onFocusDistance: (dioptres: number) => void;
+  readonly zoom: number;
+  readonly zoomRange: { min: number; max: number };
+  readonly onZoom: (zoom: number) => void;
 }) {
-  const [axis, setAxis] = useState<ExposureAxis>("lv");
   const isoList = useMemo(() => (isoRange ? isoStops(isoRange) : []), [isoRange]);
   const shutterList = useMemo(
     () => (exposureTimeRange ? shutterStops(exposureTimeRange, fps > 0 ? fps : 30) : []),
     [exposureTimeRange, fps],
   );
   const canExpose = isoList.length > 1 && shutterList.length > 1;
+  const canZoom = zoomRange.max > zoomRange.min;
+  const axes = AXES.filter(({ axis }) => (axis === "z" ? canZoom : canExpose));
+  const [axis, setAxis] = useState<Axis>(canExpose ? "lv" : "z");
 
   // LV: one light value spread over ISO and shutter, holding the shutter at
   // 180 degrees (1/(2*fps)) for as long as ISO can carry the change.
@@ -270,15 +290,25 @@ export function ManualControls({
     };
   }, [canExpose, isoList, shutterList, fps]);
 
-  const exposureT = !canExpose
-    ? 0.5
-    : axis === "lv"
-      ? (lv?.toT(iso, exposureNs) ?? 0.5)
-      : axis === "iso"
-        ? nearest(isoList, iso) / (isoList.length - 1)
-        : nearest(shutterList, exposureNs) / (shutterList.length - 1);
+  const zoomRatio = canZoom ? zoomRange.max / zoomRange.min : 1;
+  const leftT =
+    axis === "z"
+      ? canZoom
+        ? Math.log(Math.max(zoomRange.min, zoom) / zoomRange.min) / Math.log(zoomRatio)
+        : 0
+      : !canExpose
+        ? 0.5
+        : axis === "lv"
+          ? (lv?.toT(iso, exposureNs) ?? 0.5)
+          : axis === "iso"
+            ? nearest(isoList, iso) / (isoList.length - 1)
+            : nearest(shutterList, exposureNs) / (shutterList.length - 1);
 
-  const onExposureT = (t: number) => {
+  const onLeftT = (t: number) => {
+    if (axis === "z") {
+      if (canZoom) onZoom(Math.round(zoomRange.min * zoomRatio ** t * 10) / 10);
+      return;
+    }
     if (!canExpose) return;
     if (axis === "lv" && lv) {
       const [i, s] = lv.fromT(t);
@@ -290,82 +320,127 @@ export function ManualControls({
     }
   };
 
+  const leftLines =
+    axis === "z"
+      ? [`${zoom.toFixed(1).replace(/\.0$/, "")}x`]
+      : axis === "lv"
+        ? [`${Math.round(iso)}`, shutterText(exposureNs)]
+        : axis === "iso"
+          ? [`${Math.round(iso)}`]
+          : [shutterText(exposureNs)];
+
   const focusT = focusNear > 0 ? Math.min(1, Math.max(0, focusDistance / focusNear)) : 0;
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      {canExpose ? (
-        <View
-          pointerEvents="box-none"
-          style={[styles.side, { left: insets.left, top: insets.top, bottom: insets.bottom }]}
-        >
-          <Tape
-            value={exposureT}
-            onChange={onExposureT}
-            side="left"
-            lines={[`${Math.round(iso)}`, shutterText(exposureNs)]}
-            accessibilityLabel="Exposure"
+      {axes.length > 0 ? (
+        <>
+          {/* In the black column in landscape; portrait has none, so beside the ruler. */}
+          <AxisWheel
+            axes={axes}
+            axis={axis}
+            onAxis={setAxis}
+            left={leadWidth >= 60 ? 0 : insets.left + RULER_WIDTH + 6}
+            width={leadWidth >= 60 ? leadWidth : 64}
           />
-          <View style={styles.axes}>
-            {(["lv", "iso", "s"] as const).map((a) => (
-              <Pressable
-                key={a}
-                onPress={() => setAxis(a)}
-                accessibilityRole="button"
-                accessibilityLabel={a === "lv" ? "Light value" : a === "iso" ? "ISO" : "Shutter"}
-                accessibilityState={{ selected: axis === a }}
-                className="active:opacity-60"
-                style={[styles.axis, axis === a && styles.axisOn]}
-              >
-                <Text style={[styles.axisText, axis === a && styles.axisTextOn]}>{a.toUpperCase()}</Text>
-              </Pressable>
-            ))}
+          <View
+            pointerEvents="box-none"
+            style={[styles.side, { left: insets.left, top: insets.top, bottom: insets.bottom }]}
+          >
+            {/* Keyed by axis: a new axis is a new ruler, not the old one sliding. */}
+            <Ruler key={axis} value={leftT} onChange={onLeftT} side="left" lines={leftLines} label={axis} />
           </View>
-        </View>
+        </>
       ) : null}
       {focusNear > 0 ? (
         <View
           pointerEvents="box-none"
           style={[styles.side, { right: insets.right, top: insets.top, bottom: insets.bottom }]}
         >
-          <Tape
-            value={focusT}
-            onChange={(t) => onFocusDistance(t * focusNear)}
-            side="right"
-            lines={[focusText(focusT)]}
-            accessibilityLabel="Focus"
-          />
+          <Ruler value={focusT} onChange={(t) => onFocusDistance(t * focusNear)} side="right" lines={[focusText(focusT)]} label="Focus" />
         </View>
       ) : null}
     </View>
   );
 }
 
-/** How often a moving tape tells the camera: sixteen times a second. */
-const COMMIT_MS = 60;
-const TAPE_WIDTH = 56;
-const TICKS = 40;
+const WHEEL_ITEM = 50;
 
 /**
- * A vertical tick tape with an amber index line, dragged up and down. The
- * drag runs on the UI thread and is relative - the line moves by the finger's
- * travel, wherever the finger lands - so a small adjustment is a small
- * movement, not a jump to the touch point.
+ * LV / ISO / S / Z down the black column, the chosen one in an amber box at
+ * mid-height and its neighbours fading above and below it, as Filmic draws
+ * its wheel. A tap on a neighbour turns the wheel to it.
  */
-function Tape({
+function AxisWheel({
+  axes,
+  axis,
+  onAxis,
+  left,
+  width,
+}: {
+  readonly axes: typeof AXES;
+  readonly axis: Axis;
+  readonly onAxis: (axis: Axis) => void;
+  readonly left: number;
+  readonly width: number;
+}) {
+  const index = Math.max(0, axes.findIndex((a) => a.axis === axis));
+  return (
+    <View pointerEvents="box-none" style={[styles.wheel, { left, width }]}>
+      {axes.map(({ axis: a, label, a11y }, i) => {
+        const offset = i - index;
+        if (Math.abs(offset) > 1) return null;
+        const on = offset === 0;
+        return (
+          <Pressable
+            key={a}
+            onPress={() => onAxis(a)}
+            accessibilityRole="button"
+            accessibilityLabel={a11y}
+            accessibilityState={{ selected: on }}
+            className="active:opacity-60"
+            style={[
+              styles.wheelItem,
+              { transform: [{ translateY: offset * WHEEL_ITEM }] },
+              on && styles.wheelItemOn,
+            ]}
+          >
+            <Text style={[styles.wheelText, on ? styles.wheelTextOn : styles.wheelTextOff]}>{label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/** How often a moving ruler tells the camera: sixteen times a second. */
+const COMMIT_MS = 60;
+const RULER_WIDTH = 40;
+/** One minor tick per this many points of ruler. */
+const TICK_EVERY = 11;
+/** The ruler's full travel, as a share of the strip's height. */
+const RULER_SPAN = 0.9;
+
+/**
+ * A ruler that slides under a fixed index line at mid-height. The line and
+ * the value never move; the ticks do, the way a lens ring turns under its
+ * mark. The drag runs on the UI thread and follows the finger: ruler up,
+ * value up.
+ */
+function Ruler({
   value,
   onChange,
   side,
   lines,
-  accessibilityLabel,
+  label,
 }: {
   readonly value: number;
   readonly onChange: (t: number) => void;
   readonly side: "left" | "right";
   readonly lines: string[];
-  readonly accessibilityLabel: string;
+  readonly label: string;
 }) {
-  const height = useSharedValue(0);
+  const span = useSharedValue(0);
   const pos = useSharedValue(value);
   const start = useSharedValue(value);
   const dragging = useSharedValue(false);
@@ -383,8 +458,8 @@ function Tape({
       start.value = pos.value;
     })
     .onUpdate((e) => {
-      if (height.value <= 0) return;
-      pos.value = Math.min(1, Math.max(0, start.value - e.translationY / height.value));
+      if (span.value <= 0) return;
+      pos.value = Math.min(1, Math.max(0, start.value - e.translationY / span.value));
       const now = Date.now();
       if (now - lastCommit.value >= COMMIT_MS) {
         lastCommit.value = now;
@@ -396,45 +471,51 @@ function Tape({
       scheduleOnRN(onChange, pos.value);
     });
 
-  const indexStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: (1 - pos.value) * height.value }],
+  const rulerLength = h * RULER_SPAN;
+  // The ruler's top end sits on the line at the bottom of the range and its
+  // bottom end at the top of it: what is under the line is the value.
+  const rulerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: span.value * (1 - pos.value) - span.value }],
   }));
+  const ticks = rulerLength > 0 ? Math.floor(rulerLength / TICK_EVERY) : 0;
+  const outer = side === "left" ? { left: 4 } : { right: 4 };
 
   return (
     <GestureDetector gesture={pan}>
       <View
         accessible
         accessibilityRole="adjustable"
-        accessibilityLabel={accessibilityLabel}
+        accessibilityLabel={label}
         accessibilityValue={{ text: lines.join(" ") }}
         onLayout={(e) => {
-          height.value = e.nativeEvent.layout.height;
-          setH(e.nativeEvent.layout.height);
+          const height = e.nativeEvent.layout.height;
+          span.value = height * RULER_SPAN;
+          setH(height);
         }}
-        style={styles.tape}
+        style={styles.strip}
       >
-        {h > 0
-          ? Array.from({ length: TICKS + 1 }, (_, i) => (
+        {h > 0 ? (
+          <Animated.View pointerEvents="none" style={[styles.ruler, { top: h / 2, height: rulerLength }, rulerStyle]}>
+            {Array.from({ length: ticks + 1 }, (_, i) => (
               <View
                 key={i}
-                style={[
-                  styles.tick,
-                  { top: (i / TICKS) * h, width: i % 5 === 0 ? 26 : 14 },
-                  side === "left" ? { left: 6 } : { right: 6 },
-                ]}
+                style={[styles.tick, outer, { top: (i / ticks) * rulerLength, width: i % 5 === 0 ? 24 : 11 }]}
               />
-            ))
-          : null}
-        <Animated.View pointerEvents="none" style={[styles.index, indexStyle]}>
-          <View style={styles.indexLine} />
-          <View style={[styles.indexLabel, side === "left" ? { left: TAPE_WIDTH + 6 } : { right: TAPE_WIDTH + 6 }]}>
-            {lines.map((line) => (
-              <Text key={line} style={styles.indexText}>
-                {line}
-              </Text>
             ))}
-          </View>
-        </Animated.View>
+          </Animated.View>
+        ) : null}
+        {/* The index: fixed at mid-height, the value beside it. */}
+        <View pointerEvents="none" style={[styles.indexLine, side === "left" ? { left: 0, right: -28 } : { right: 0, left: -28 }]} />
+        <View
+          pointerEvents="none"
+          style={[styles.indexLabel, side === "left" ? { left: RULER_WIDTH + 34 } : { right: RULER_WIDTH + 34 }]}
+        >
+          {lines.map((line) => (
+            <Text key={line} style={[styles.indexText, side === "right" && { textAlign: "right" }]}>
+              {line}
+            </Text>
+          ))}
+        </View>
       </View>
     </GestureDetector>
   );
@@ -459,31 +540,39 @@ const styles = StyleSheet.create({
   },
   segmentOn: { backgroundColor: "rgba(235,235,235,0.92)" },
   segmentLabel: { fontSize: 13 },
-  side: { position: "absolute", flexDirection: "row", alignItems: "center", paddingVertical: 12 },
-  tape: {
-    width: TAPE_WIDTH,
+  side: { position: "absolute" },
+  strip: {
+    width: RULER_WIDTH,
     height: "100%",
-    backgroundColor: "rgba(0,0,0,0.28)",
+    backgroundColor: "rgba(0,0,0,0.18)",
   },
+  ruler: { position: "absolute", left: 0, right: 0 },
   tick: {
     position: "absolute",
     height: StyleSheet.hairlineWidth * 2,
-    backgroundColor: "rgba(255,255,255,0.55)",
+    backgroundColor: "rgba(255,255,255,0.6)",
   },
-  index: { position: "absolute", left: 0, right: 0, top: 0 },
-  indexLine: { height: 3, marginTop: -1.5, backgroundColor: filmic.color.accent },
-  indexLabel: { position: "absolute", top: -20 },
-  indexText: { color: filmic.color.accent, fontSize: 17, fontWeight: "700" },
-  axes: { marginLeft: 8, gap: 6, alignSelf: "flex-end" },
-  axis: {
-    minWidth: 44,
-    minHeight: 36,
+  indexLine: { position: "absolute", top: "50%", height: 3, marginTop: -1.5, backgroundColor: filmic.color.accent },
+  indexLabel: { position: "absolute", top: "50%", marginTop: -12 },
+  indexText: { color: filmic.color.accent, fontSize: 19, fontWeight: "700", lineHeight: 24 },
+  wheel: {
+    position: "absolute",
+    top: "50%",
+    marginTop: -WHEEL_ITEM / 2,
+    height: WHEEL_ITEM,
+    alignItems: "center",
+  },
+  wheelItem: {
+    position: "absolute",
+    height: WHEEL_ITEM - 6,
+    minWidth: 52,
+    paddingHorizontal: 6,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 6,
-    backgroundColor: "rgba(0,0,0,0.45)",
+    borderRadius: 4,
   },
-  axisOn: { backgroundColor: filmic.color.accent },
-  axisText: { color: filmic.color.ink, fontSize: 13, fontWeight: "700" },
-  axisTextOn: { color: filmic.color.base },
+  wheelItemOn: { backgroundColor: filmic.color.accent },
+  wheelText: { fontSize: 24, fontWeight: "300", letterSpacing: 1 },
+  wheelTextOn: { color: filmic.color.accentInk },
+  wheelTextOff: { color: "rgba(244,245,247,0.45)" },
 });
