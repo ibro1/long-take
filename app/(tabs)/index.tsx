@@ -61,7 +61,8 @@ import { DrainEstimator } from "@/lib/broadcast/battery-estimate";
 import { listPresets, type Preset, savePreset, subscribePresets } from "@/lib/broadcast/presets";
 import { ColorPanel } from "@/components/broadcast/color-panel";
 import { GammaTab, LooksTab, LutTab } from "@/components/broadcast/grade-tabs";
-import { applyGrade, type GradeState, loadGrade, saveGrade } from "@/lib/broadcast/grade";
+import { applyGrade, GRADE_DEFAULTS, type GradeState, loadGrade, saveGrade } from "@/lib/broadcast/grade";
+import { registerPresetActions } from "@/lib/broadcast/preset-actions";
 import { routeForTile, SettingsGrid } from "@/components/settings/settings-grid";
 import { ChoiceRow, Group, Page, SwitchRow } from "@/components/settings/chrome";
 import { useReadout } from "@/lib/broadcast/readouts";
@@ -1337,7 +1338,8 @@ export default function BroadcastScreen() {
       icon: PresetIcon,
       label: "Presets",
       hint: presets.length > 0 ? `${presets.length} saved` : "Save this camera setup",
-      onPress: () => setPanel("presets"),
+      // One place for presets, as Filmic has: the Presets page.
+      onPress: () => openSettings("/settings/presets"),
     },
     {
       icon: GlobeIcon,
@@ -1472,58 +1474,41 @@ export default function BroadcastScreen() {
     notify(live ? `${preset.name}: camera applied (picture size waits until off air)` : `${preset.name} applied`);
   };
 
+  /** Filmic's Reset: the camera back to auto, the grade off, zoom out. */
+  const resetCamera = () => {
+    if (exposureMode === "manual") void setExposureMode("auto");
+    if (exposureLocked) void setExposureLock(false);
+    void setExposure(0);
+    void setWhiteBalance(1);
+    if (manualFocus) void resumeAutoFocus();
+    setFocusHeld(false);
+    setMeterMode("reticle");
+    void setZoom(Math.max(1, zoomRange.min));
+    changeGrade({ ...GRADE_DEFAULTS, luts: gradeRef.current.luts });
+    notify("Camera reset to auto");
+  };
+  // Lent to the Presets page through a ref, so it always calls this render's.
+  const presetActionsRef = useRef({ save: (_: string) => {}, apply: (_: Preset) => {}, reset: () => {} });
+  presetActionsRef.current = {
+    save: (name: string) => {
+      savePreset(presetSnapshot(name));
+      notify(`Saved "${name}"`);
+    },
+    apply: applyPreset,
+    reset: resetCamera,
+  };
+  useEffect(() => {
+    registerPresetActions({
+      save: (name) => presetActionsRef.current.save(name),
+      apply: (preset) => presetActionsRef.current.apply(preset),
+      reset: () => presetActionsRef.current.reset(),
+    });
+    return () => registerPresetActions(null);
+  }, []);
+
   const panelBody =
     // The colour panel is hosted on its own, beside the leading column.
-    panel === null || panel === "image" ? null : panel === "presets" ? (
-      <Panel title="Presets" onClose={closePanel}>
-        {presets.length === 0 ? (
-          <Text className="text-sm text-filmic-inkmuted">
-            Nothing saved yet. Set the camera up, name it below, and save.
-          </Text>
-        ) : (
-          presets.map((preset) => (
-            <Row
-              key={preset.id}
-              label={preset.name}
-              hint={`${preset.video.height}p ${preset.video.fps} · ${
-                preset.exposure.mode === "manual" ? `ISO ${preset.exposure.iso}` : "auto exposure"
-              } · ${preset.whiteBalance.mode === "kelvin" ? `${preset.whiteBalance.kelvin}K` : "WB preset"}`}
-              selected={false}
-              onPress={() => applyPreset(preset)}
-            />
-          ))
-        )}
-        <View className="flex-row items-center gap-2 pt-2">
-          <TextInput
-            value={presetName}
-            onChangeText={setPresetName}
-            placeholder="Name, e.g. Masjid class"
-            placeholderTextColor="#9BA0AC"
-            className="min-h-11 flex-1 rounded-xl bg-filmic-elevated px-3 text-sm text-filmic-ink"
-          />
-          <Pressable
-            accessibilityRole="button"
-            disabled={presetName.trim().length === 0}
-            onPress={() => {
-              savePreset(presetSnapshot(presetName.trim()));
-              setPresetName("");
-              notify("Preset saved");
-            }}
-            className={`min-h-11 justify-center rounded-xl px-4 active:opacity-60 ${
-              presetName.trim().length === 0 ? "bg-filmic-elevated" : "bg-filmic-accent"
-            }`}
-          >
-            <Text
-              className={`text-sm font-semibold ${
-                presetName.trim().length === 0 ? "text-filmic-inkmuted" : "text-filmic-accentink"
-              }`}
-            >
-              Save current
-            </Text>
-          </Pressable>
-        </View>
-      </Panel>
-    ) : panel === "log" ? (
+    panel === null || panel === "image" || panel === "presets" ? null : panel === "log" ? (
       <LiveLogPanel onClose={closePanel} />
     ) : panel === "camera" ? (
       <Panel title="Camera" onClose={closePanel}>
