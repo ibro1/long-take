@@ -6,6 +6,15 @@ const config = getDefaultConfig(__dirname);
 
 config.resolver.sourceExts.push("sql");
 
+// Native build output is not source. Watching it crashed Metro (ENOENT) when a
+// Gradle build deleted a generated folder under the watcher, which took the
+// dev-client tunnel down mid-session.
+const nativeBuild = /[/\\](android|ios)[/\\](.*[/\\])?(build|\.gradle|\.cxx)[/\\].*/;
+config.resolver.blockList = [
+  ...(Array.isArray(config.resolver.blockList) ? config.resolver.blockList : [config.resolver.blockList].filter(Boolean)),
+  nativeBuild,
+];
+
 // Add wasm asset support
 config.resolver.assetExts.push("wasm");
 
