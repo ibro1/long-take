@@ -425,20 +425,20 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     litHot.alpha = alpha
     unlit.alpha = alpha
 
+    /**
+     * Filmic's meter: thin bars, well apart, one at each edge of the view, so
+     * left and right read as two channels at a glance rather than one block.
+     * A bar is at most [BAR_WIDTH_DP] wide whatever the view's width; the
+     * view's width is the spacing.
+     */
+    val bar = min(BAR_WIDTH_DP * density, w / 3f)
     if (drawnChannels < 2) {
-      drawColumn(canvas, 0, 0f, w, alpha)
+      val x0 = (w - bar) / 2f
+      drawColumn(canvas, 0, x0, x0 + bar, alpha)
       return
     }
-    /**
-     * Two columns share the width with the same gap the segments use between
-     * them, so the pair reads as one meter split down the middle rather than
-     * two meters. Capped at a third of the width so a very narrow meter still
-     * leaves each column something to light.
-     */
-    val split = min(gap(), w / 3f)
-    val columnWidth = (w - split) / 2f
-    drawColumn(canvas, 0, 0f, columnWidth, alpha)
-    drawColumn(canvas, 1, columnWidth + split, w, alpha)
+    drawColumn(canvas, 0, 0f, bar, alpha)
+    drawColumn(canvas, 1, w - bar, w, alpha)
   }
 
   /**
@@ -548,6 +548,9 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
 
     /** As in level-meter.tsx. */
     const val SEGMENTS = 12
+
+    /** How wide one channel's bar is drawn, in dp. */
+    const val BAR_WIDTH_DP = 7f
 
     /** As in level-meter.tsx: above this the microphone is close to clipping. */
     const val HOT = 0.82f

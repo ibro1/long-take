@@ -2888,6 +2888,10 @@ const Reticles = memo(ReticlesView);
  * drew it. An older build falls back to the JS meter. Same 16 x 129 footprint.
  */
 function Meter({ muted, maxFps }: { muted: boolean; maxFps: number }) {
+  // Filmic's proportions: tall, and wide enough that the two bars sit apart.
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  const meterH = screenW > screenH ? Math.round(Math.min(300, screenH * 0.5)) : 170;
+  const meterW = 34;
   const [gain, setGain] = useState(() => loadSettings().micGain);
   const onGain = useCallback((next: number) => {
     setGain(next);
@@ -2897,10 +2901,10 @@ function Meter({ muted, maxFps }: { muted: boolean; maxFps: number }) {
   if (LevelMeterView) {
     return (
       <View className="items-center gap-1.5">
-        <View style={{ width: 16, height: 129 }}>
-          <LevelMeterView muted={muted} maxFps={maxFps} style={{ width: 16, height: 129 }} />
+        <View style={{ width: meterW, height: meterH }}>
+          <LevelMeterView muted={muted} maxFps={maxFps} style={{ width: meterW, height: meterH }} />
           {/* Filmic's gain bar across the meter: drag for input gain. */}
-          <GainHandle gain={gain} height={129} width={16} onGain={onGain} />
+          <GainHandle gain={gain} height={meterH} width={meterW} onGain={onGain} />
         </View>
         {muted ? (
           <Text className="text-[10px] font-semibold uppercase text-filmic-alert">Muted</Text>
