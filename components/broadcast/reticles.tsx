@@ -44,16 +44,16 @@ import { filmic } from "@/lib/theme/filmic";
  * cross to JS.
  */
 
-/** Drawn size of either reticle. */
-const DRAW = 80;
+/** Drawn size of either reticle - Filmic's size on a phone, measured off its screenshots. */
+const DRAW = 66;
 
 /** Touch target around the drawing; a little larger so a thumb catches the edge. */
-const TOUCH = 96;
+const TOUCH = 88;
 
 /** Half the drawing: how far a centre must stay from the chrome. */
 const HALF = DRAW / 2;
 
-const STROKE = 2.5;
+const STROKE = 2.2;
 
 /** A soft dark under-stroke so the amber reads over a bright sky or a white wall. */
 const SHADOW_STROKE = 4.5;
@@ -166,7 +166,7 @@ function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: nu
 }
 
 // --- Exposure: open circle, gaps top and bottom ------------------------------
-const EXPO_R = 38;
+const EXPO_R = 31;
 const EXPO_GAP_DEG = 32;
 const EXPO_PATHS = [
   arcPath(HALF, HALF, EXPO_R, EXPO_GAP_DEG / 2, 180 - EXPO_GAP_DEG / 2),
@@ -174,9 +174,9 @@ const EXPO_PATHS = [
 ];
 
 // --- Focus: rounded square, gaps on the left and right sides ------------------
-const FOCUS_SIDE = 76;
-const FOCUS_R = 8;
-const FOCUS_GAP = 22;
+const FOCUS_SIDE = 62;
+const FOCUS_R = 7;
+const FOCUS_GAP = 18;
 const FOCUS_PATHS = (() => {
   const lo = (DRAW - FOCUS_SIDE) / 2;
   const hi = lo + FOCUS_SIDE;

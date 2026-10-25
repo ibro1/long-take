@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { type LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
+import Animated, { type SharedValue, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Path, Rect } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
 
@@ -371,12 +371,15 @@ export function ManualControls({
   );
 }
 
-const WHEEL_ITEM = 50;
+const WHEEL_ITEM = 44;
+/** How much of the wheel shows: the chosen axis and a little over one either side. */
+const WHEEL_VIEW = WHEEL_ITEM * 3.4;
 
 /**
- * LV / ISO / S / Z down the black column, the chosen one in an amber box at
- * mid-height and its neighbours fading above and below it, as Filmic draws
- * its wheel. A tap on a neighbour turns the wheel to it.
+ * LV / ISO / S / Z as Filmic's scroll wheel down the black column: a fixed
+ * amber box at mid-height, in line with the ruler's index, and the labels
+ * rolling through it. Drag to scroll and it snaps to the nearest; tap a label
+ * to roll to it. On the UI thread, like the rulers.
  */
 export function AxisWheel({
   axes,
@@ -392,31 +395,79 @@ export function AxisWheel({
   readonly width: number;
 }) {
   const index = Math.max(0, axes.findIndex((a) => a.axis === axis));
+  const max = (axes.length - 1) * WHEEL_ITEM;
+  const offset = useSharedValue(index * WHEEL_ITEM);
+  const start = useSharedValue(0);
+
+  useEffect(() => {
+    offset.value = withTiming(index * WHEEL_ITEM, { duration: 160 });
+  }, [index, offset]);
+
+  const pick = (i: number) => {
+    const next = axes[Math.max(0, Math.min(axes.length - 1, i))];
+    if (next) onAxis(next.axis);
+  };
+
+  const pan = Gesture.Pan()
+    .activeOffsetY([-6, 6])
+    .onBegin(() => {
+      start.value = offset.value;
+    })
+    .onUpdate((e) => {
+      offset.value = Math.min(max + WHEEL_ITEM * 0.4, Math.max(-WHEEL_ITEM * 0.4, start.value - e.translationY));
+    })
+    .onEnd(() => {
+      const i = Math.round(Math.min(max, Math.max(0, offset.value)) / WHEEL_ITEM);
+      offset.value = withTiming(i * WHEEL_ITEM, { duration: 140 });
+      scheduleOnRN(pick, i);
+    });
+  const tap = Gesture.Tap().onEnd((e) => {
+    const i = Math.round((offset.value + (e.y - WHEEL_VIEW / 2)) / WHEEL_ITEM);
+    offset.value = withTiming(Math.min(max, Math.max(0, i * WHEEL_ITEM)), { duration: 160 });
+    scheduleOnRN(pick, i);
+  });
+
   return (
-    <View pointerEvents="box-none" style={[styles.wheel, { left, width }]}>
-      {axes.map(({ axis: a, label, a11y }, i) => {
-        const offset = i - index;
-        if (Math.abs(offset) > 1) return null;
-        const on = offset === 0;
-        return (
-          <Pressable
-            key={a}
-            onPress={() => onAxis(a)}
-            accessibilityRole="button"
-            accessibilityLabel={a11y}
-            accessibilityState={{ selected: on }}
-            className="active:opacity-60"
-            style={[
-              styles.wheelItem,
-              { transform: [{ translateY: offset * WHEEL_ITEM }] },
-              on && styles.wheelItemOn,
-            ]}
-          >
-            <Text style={[styles.wheelText, on ? styles.wheelTextOn : styles.wheelTextOff]}>{label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
+    <GestureDetector gesture={Gesture.Exclusive(pan, tap)}>
+      <View
+        accessibilityRole="adjustable"
+        accessibilityLabel="Manual control"
+        accessibilityValue={{ text: axes[index]?.a11y ?? "" }}
+        accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+        onAccessibilityAction={(e) => pick(index + (e.nativeEvent.actionName === "increment" ? 1 : -1))}
+        style={[styles.wheel, { left, width }]}
+      >
+        <View pointerEvents="none" style={styles.wheelBox} />
+        {axes.map(({ axis: a, label }, i) => (
+          <WheelLabel key={a} label={label} i={i} offset={offset} on={i === index} />
+        ))}
+      </View>
+    </GestureDetector>
+  );
+}
+
+function WheelLabel({
+  label,
+  i,
+  offset,
+  on,
+}: {
+  readonly label: string;
+  readonly i: number;
+  readonly offset: SharedValue<number>;
+  readonly on: boolean;
+}) {
+  const style = useAnimatedStyle(() => {
+    const d = i * WHEEL_ITEM - offset.value;
+    return {
+      transform: [{ translateY: d }],
+      opacity: Math.max(0, 1 - Math.abs(d) / (WHEEL_ITEM * 2.2)),
+    };
+  });
+  return (
+    <Animated.View pointerEvents="none" style={[styles.wheelItem, style]}>
+      <Text style={[styles.wheelText, on ? styles.wheelTextOn : styles.wheelTextOff]}>{label}</Text>
+    </Animated.View>
   );
 }
 
@@ -570,21 +621,32 @@ const styles = StyleSheet.create({
   wheel: {
     position: "absolute",
     top: "50%",
-    marginTop: -WHEEL_ITEM / 2,
+    marginTop: -WHEEL_VIEW / 2,
+    height: WHEEL_VIEW,
+    overflow: "hidden",
+    alignItems: "flex-end",
+    paddingRight: 4,
+  },
+  // Fixed, like Filmic's: the labels roll through it.
+  wheelBox: {
+    position: "absolute",
+    right: 4,
+    top: (WHEEL_VIEW - WHEEL_ITEM) / 2,
+    width: 50,
     height: WHEEL_ITEM,
-    alignItems: "center",
+    borderRadius: 3,
+    backgroundColor: filmic.color.accent,
   },
   wheelItem: {
     position: "absolute",
-    height: WHEEL_ITEM - 6,
-    minWidth: 52,
-    paddingHorizontal: 6,
+    right: 4,
+    top: (WHEEL_VIEW - WHEEL_ITEM) / 2,
+    width: 50,
+    height: WHEEL_ITEM,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 4,
   },
-  wheelItemOn: { backgroundColor: filmic.color.accent },
-  wheelText: { fontSize: 24, fontWeight: "300", letterSpacing: 1 },
-  wheelTextOn: { color: filmic.color.accentInk },
-  wheelTextOff: { color: "rgba(244,245,247,0.45)" },
+  wheelText: { fontSize: 21, fontWeight: "200", letterSpacing: 0.5 },
+  wheelTextOn: { color: filmic.color.accentInk, fontWeight: "300" },
+  wheelTextOff: { color: "rgba(244,245,247,0.7)" },
 });
