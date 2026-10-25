@@ -128,6 +128,14 @@ import {
   setThermalBitrateCap,
 } from "@/modules/framevane-broadcaster";
 
+/**
+ * The clear band of the landscape picture a panel may use: under the top row
+ * (discs, readout strip, destination pill) and over the bottom row (info
+ * panel, corner discs). Measured off the layout those rows are drawn with.
+ */
+const PANEL_BAND_TOP = 88;
+const PANEL_BAND_BOTTOM = 72;
+
 /** Named apart from the Panel component: one is a box, this is which box. */
 /**
  * Long enough to lift the phone and frame the shot, short enough that nobody
@@ -2258,21 +2266,21 @@ export default function BroadcastScreen() {
           the bottom of the frame as portrait does would leave it two lines
           tall, and putting it in the middle would cover the shot. It clears the
           level meter on its left and the control column on its right. */}
+      {/* Landscape panels sit in the clear band of the picture: below the
+          readout strip and destination pill, above the info panel and the
+          corner discs, and between the top discs - so nothing on the glass is
+          drawn over it or under it. Centred and capped in width, as Filmic's
+          panels are, rather than a sheet across the whole frame. */}
       {wide && panelBody ? (
-        <SafeAreaView
+        <View
           pointerEvents="box-none"
-          edges={["top", "bottom", "left"]}
-          className="absolute bottom-0 top-0"
-          style={{ left: lead }}
+          className="absolute items-center justify-center"
+          style={{ top: PANEL_BAND_TOP, bottom: PANEL_BAND_BOTTOM, left: lead + 76, right: trail + 76 }}
         >
-          <View
-            pointerEvents="box-none"
-            className="h-full justify-center pl-3 pr-2"
-            style={{ width: width - trail - lead - 8 }}
-          >
+          <View pointerEvents="box-none" style={{ width: "100%", maxWidth: 520, maxHeight: "100%" }}>
             {panelBody}
           </View>
-        </SafeAreaView>
+        </View>
       ) : null}
 
       {/* In landscape the one-line notice goes across the picture rather than

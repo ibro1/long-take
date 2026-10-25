@@ -297,8 +297,6 @@ export function DestinationChip({
  * the bottom of the frame and must leave the shot visible above it, which is
  * the half the operator is actually framing.
  */
-/** A pinned footer's button and padding, taken off the scroll in landscape. */
-const FOOTER_ROOM = 76;
 
 export function Panel({
   title,
@@ -330,7 +328,10 @@ export function Panel({
   const wide = width > height;
 
   return (
-    <View className="rounded-xl bg-filmic-surface">
+    // In landscape the host gives the panel the clear band between the top
+    // readouts and the info panel; it shrinks to that band and scrolls inside
+    // it rather than running under the HUD.
+    <View className="rounded-xl bg-filmic-surface" style={wide ? { maxHeight: "100%" } : undefined}>
       <View className="flex-row items-center justify-between gap-2 pl-4 pr-2 pt-3 pb-1">
         <Text
           style={bidi(title)}
@@ -361,9 +362,11 @@ export function Panel({
          * is centred, so the title and the button were both clipped. Portrait
          * has the height to spare at 46%.
          */
-        style={{
-          maxHeight: height * (wide ? 0.72 : tall ? 0.56 : 0.46) - (footer && wide ? FOOTER_ROOM : 0),
-        }}
+        style={
+          wide
+            ? { flexShrink: 1 }
+            : { maxHeight: height * (tall ? 0.56 : 0.46) }
+        }
         contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingBottom: 16 }}
         showsVerticalScrollIndicator={false}
       >
