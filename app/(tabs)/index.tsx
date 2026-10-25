@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BufferMeter } from "@/components/broadcast/buffer-meter";
-import { Thermometer, type LucideIcon } from "lucide-react-native";
+import { Blend, ChartSpline, Thermometer, type LucideIcon } from "lucide-react-native";
 
 import { useImmersiveScreen } from "@/lib/immersive";
 import {
@@ -60,6 +60,8 @@ import { useIdleDim } from "@/lib/broadcast/idle-dim";
 import { DrainEstimator } from "@/lib/broadcast/battery-estimate";
 import { listPresets, type Preset, savePreset, subscribePresets } from "@/lib/broadcast/presets";
 import { ColorPanel } from "@/components/broadcast/color-panel";
+import { GammaTab, LooksTab, LutTab } from "@/components/broadcast/grade-tabs";
+import { applyGrade, type GradeState, loadGrade, saveGrade } from "@/lib/broadcast/grade";
 import { routeForTile, SettingsGrid } from "@/components/settings/settings-grid";
 import { ChoiceRow, Group, Page, SwitchRow } from "@/components/settings/chrome";
 import { useReadout } from "@/lib/broadcast/readouts";
@@ -134,6 +136,7 @@ import {
   setMonitor,
   setMonitorOptions,
   setScreenBrightness,
+  hasColorGrade,
   setMicGain,
   setPauseSlate,
   setThermalBitrateCap,
@@ -146,6 +149,13 @@ import {
  */
 const PANEL_BAND_TOP = 88;
 const PANEL_BAND_BOTTOM = 72;
+
+const COLOR_TABS = [
+  { id: "wb", label: "White balance", Icon: Thermometer },
+  { id: "looks", label: "Looks", Icon: Blend },
+  { id: "gamma", label: "Gamma", Icon: ChartSpline },
+  { id: "lut", label: "LUT", Icon: Thermometer },
+] as const;
 
 const COLOR_PANEL = {
   position: "absolute",
@@ -655,6 +665,22 @@ export default function BroadcastScreen() {
    * one thing that is off does not.
    */
   const [usualMic, setUsualMic] = useState(() => loadPreferences().usualMic);
+  // The colour panel's tab, and its Looks / Gamma / LUT grade - sent to the
+  // camera once at launch and again on every change.
+  const [colorTab, setColorTab] = useState<"wb" | "looks" | "gamma" | "lut">("wb");
+  const [grade, setGrade] = useState<GradeState>(() => loadGrade());
+  useEffect(() => {
+    void applyGrade(grade);
+    // Once, at mount: later changes go through changeGrade.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const gradeRef = useRef(grade);
+  const changeGrade = useCallback((next: GradeState) => {
+    // Side effects outside the state updater, which React may run twice.
+    saveGrade(next, gradeRef.current);
+    gradeRef.current = next;
+    setGrade(next);
+  }, []);
   const [wbSlots, setWbSlots] = useState(() => {
     const p = loadPreferences();
     return { a: p.wbSlotA, b: p.wbSlotB };
@@ -2385,15 +2411,40 @@ export default function BroadcastScreen() {
           ]}
         >
           <View style={{ width: 62, backgroundColor: "#D6D6D8" }}>
-            <View
-              accessibilityRole="tab"
-              accessibilityState={{ selected: true }}
-              accessibilityLabel="White balance"
-              style={{ height: 72, alignItems: "center", justifyContent: "center", backgroundColor: "#EEEEEE" }}
-            >
-              <Thermometer size={28} color="#1C1C1E" strokeWidth={1.5} />
-            </View>
+            {COLOR_TABS.filter((tab) => tab.id === "wb" || hasColorGrade()).map((tab) => {
+              const on = colorTab === tab.id;
+              return (
+                <Pressable
+                  key={tab.id}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={tab.label}
+                  onPress={() => setColorTab(tab.id)}
+                  className="active:opacity-60"
+                  style={{
+                    flex: 1,
+                    maxHeight: 84,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: on ? "#EEEEEE" : "transparent",
+                  }}
+                >
+                  {tab.id === "lut" ? (
+                    <Text style={{ fontSize: 22, fontWeight: "300", color: on ? "#1C1C1E" : "#6B6B70" }}>LUT</Text>
+                  ) : (
+                    <tab.Icon size={28} color={on ? "#1C1C1E" : "#6B6B70"} strokeWidth={1.5} />
+                  )}
+                </Pressable>
+              );
+            })}
           </View>
+          {colorTab === "looks" ? (
+            <LooksTab state={grade} onChange={changeGrade} />
+          ) : colorTab === "gamma" ? (
+            <GammaTab state={grade} onChange={changeGrade} />
+          ) : colorTab === "lut" ? (
+            <LutTab state={grade} onChange={changeGrade} />
+          ) : (
           <ColorPanel
             manualWhiteBalance={capabilities?.manualWhiteBalance ?? false}
             whiteBalanceModes={whiteBalanceModes}
@@ -2410,6 +2461,7 @@ export default function BroadcastScreen() {
               notify(`Saved to ${slot.toUpperCase()}`);
             }}
           />
+          )}
         </View>
       ) : null}
 

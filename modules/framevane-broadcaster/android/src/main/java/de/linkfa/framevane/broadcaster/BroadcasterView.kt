@@ -743,6 +743,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
           val frame = holder.surfaceFrame
           runCatching {
             stream.startPreview(holder.surface, frame.width(), frame.height())
+            syncGrade(rebuild = true)
             logCaptureSize(frame.width(), frame.height())
           }.onFailure { log(LOG_WARN, "The preview would not start: ${it.message}") }
         }
@@ -1298,6 +1299,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         val frame = surfaceView.holder.surfaceFrame
         runCatching {
           stream.startPreview(surfaceView.holder.surface, frame.width(), frame.height())
+          syncGrade(rebuild = true)
           logCaptureSize(frame.width(), frame.height())
         }.onFailure { log(LOG_WARN, "The viewfinder did not come back: ${it.message}") }
         // A preview restart builds a new capture request, which starts at the
@@ -1861,7 +1863,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       val w = if (portrait) videoHeight else videoWidth
       val h = if (portrait) videoWidth else videoHeight
       val filter = ImageObjectFilterRender()
-      gl.setFilter(filter)
+      // Last in the chain, over the grade and any aid.
+      gl.addFilter(filter)
       filter.setImage(drawSlate(w, h))
       filter.setScale(100f, 100f)
       filter.setPosition(0f, 0f)
@@ -1874,8 +1877,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   }
 
   fun hideSlate() {
-    if (slateFilter == null) return
-    runCatching { stream.getGlInterface().clearFilters() }
+    val slate = slateFilter ?: return
+    runCatching { stream.getGlInterface().removeFilter(slate) }
     slateFilter = null
   }
 
@@ -1914,6 +1917,41 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   /** Shrink to fit one line rather than run off the frame in a long translation. */
   private fun fitText(paint: Paint, text: String, maxWidth: Float) {
     while (paint.measureText(text) > maxWidth && paint.textSize > 8f) paint.textSize *= 0.92f
+  }
+
+  // --- Colour grade (Filmic's Looks, Gamma and LUT tabs) -------------------
+  //
+  // One shader, first in the filter chain, so the stream and the recording
+  // carry the grade and any monitoring aid reads the graded picture. Its
+  // settings live in [GradeOptions] and are read every frame; the filter is
+  // only added while the grade does something, so an untouched picture costs
+  // no extra GPU pass.
+
+  @Volatile
+  private var gradeFilter: ColorGradeFilterRender? = null
+
+  /** Put the grade in the chain or take it out, to match [GradeOptions]. */
+  fun syncGrade(rebuild: Boolean = false) {
+    val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return
+    runCatching {
+      // After the preview restarts, put a fresh one in rather than trust that
+      // the chain kept the old one - a lost filter or a doubled one both look
+      // like a grade that half applies.
+      if (rebuild) {
+        gradeFilter?.let { runCatching { gl.removeFilter(it) } }
+        gradeFilter = null
+      }
+      val wanted = !GradeOptions.isIdentity()
+      val current = gradeFilter
+      if (wanted && current == null) {
+        val f = ColorGradeFilterRender()
+        gl.addFilter(0, f)
+        gradeFilter = f
+      } else if (!wanted && current != null) {
+        gl.removeFilter(current)
+        gradeFilter = null
+      }
+    }.onFailure { log(LOG_WARN, "Could not apply the colour grade: ${it.message}") }
   }
 
   // --- Display-only monitoring (peaking / zebra / false colour / clipping)
@@ -1958,7 +1996,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     }
     val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return
     runCatching {
-      gl.clearFilters()
+      // Only this aid's own filter: the colour grade under it and a pause
+      // slate over it are separate filters and stay where they are.
+      monitorFilter?.let { gl.removeFilter(it) }
       monitorFilter = null
       val f: BaseFilterRender? = when (mode) {
         // Thresholded Sobel: a thin outline on only the sharp focal plane,
@@ -1983,7 +2023,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
         else -> null
       }
       if (f != null) {
-        gl.setFilter(f)
+        gl.addFilter(f)
         monitorFilter = f
       }
       monitorMode = if (monitorFilter != null) mode else "off"

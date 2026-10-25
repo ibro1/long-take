@@ -222,6 +222,8 @@ export type Preferences = {
   /** The colour panel's A and B white-balance slots: a temperature and tint, or empty. */
   wbSlotA: { kelvin: number; tint: number } | null;
   wbSlotB: { kelvin: number; tint: number } | null;
+  /** The colour panel's Looks, Gamma and LUT choices; see grade.ts. Null until first set. */
+  grade: import("./grade").GradeState | null;
 };
 
 export type TakeQuality = "economy" | "standard" | "high";
@@ -290,6 +292,7 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   takeQuality: "standard",
   wbSlotA: null,
   wbSlotB: null,
+  grade: null,
 };
 
 /**

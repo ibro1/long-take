@@ -100,6 +100,55 @@ internal fun ModuleDefinitionBuilder.cameraFunctions() {
 
   Function("isTorchOn") { BroadcasterView.current?.camera?.isLanternEnabled() ?: false }
 
+  /**
+   * Filmic's Gamma and Looks: any of `curve` (0 Native, 1 Natural, 2 Dynamic,
+   * 3 Flat, 4 Log), `black`/`white` (0..1), `shadow`/`highlight` (-1..1),
+   * `contrast`, `saturation`, `warmth`, `tint`, `shadowTone`/`highlightTone`
+   * ([r, g, b] each -1..1) and `lutStrength` (0..1). Keys left out keep their
+   * value. View-less like the monitor options: kept in [GradeOptions] and
+   * picked up by the next preview, and burned into the stream and the file.
+   */
+  Function("setColorGrade") { options: Map<String, Any?> ->
+    val o = GradeOptions
+    fun num(key: String) = (options[key] as? Number)?.toFloat()?.takeIf { !it.isNaN() }
+    fun tone(key: String) = (options[key] as? List<*>)?.mapNotNull { (it as? Number)?.toFloat() }
+      ?.takeIf { it.size == 3 }?.map { it.coerceIn(-1f, 1f) }?.toFloatArray()
+    num("curve")?.let { o.curve = it.toInt().coerceIn(0, 4) }
+    num("black")?.let { o.black = it.coerceIn(0f, 0.5f) }
+    num("white")?.let { o.white = it.coerceIn(0.5f, 1f) }
+    num("shadow")?.let { o.shadow = it.coerceIn(-1f, 1f) }
+    num("highlight")?.let { o.highlight = it.coerceIn(-1f, 1f) }
+    num("contrast")?.let { o.contrast = it.coerceIn(0.5f, 1.6f) }
+    num("saturation")?.let { o.saturation = it.coerceIn(0f, 2f) }
+    num("warmth")?.let { o.warmth = it.coerceIn(-1f, 1f) }
+    num("tint")?.let { o.tint = it.coerceIn(-1f, 1f) }
+    tone("shadowTone")?.let { o.shadowTone = it }
+    tone("highlightTone")?.let { o.highlightTone = it }
+    num("lutStrength")?.let { o.lutStrength = it.coerceIn(0f, 1f) }
+    BroadcasterView.current?.syncGrade()
+    Unit
+  }
+
+  /**
+   * Reads a `.cube` LUT from a file path (a `file://` URI is fine) and puts it
+   * in the grade, burned in. Resolves with the cube's size as used; rejects
+   * with the reason a file is not a usable LUT.
+   */
+  AsyncFunction("loadLut") { path: String ->
+    val lut = Lut.parseCube(java.io.File(path.removePrefix("file://")))
+    GradeOptions.lutLoaded = false
+    GradeOptions.pendingLut = lut
+    BroadcasterView.current?.syncGrade()
+    lut.size
+  }
+
+  Function("clearLut") {
+    GradeOptions.pendingLut = null
+    GradeOptions.lutLoaded = false
+    BroadcasterView.current?.syncGrade()
+    Unit
+  }
+
   AsyncFunction("setMonitor") { mode: String -> view().setMonitor(mode) }
 
   Function("monitorMode") { BroadcasterView.current?.monitorMode ?: "off" }

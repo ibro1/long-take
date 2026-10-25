@@ -658,6 +658,43 @@ export function setVideoMuted(muted: boolean): Promise<void> {
   return native.setVideoMuted(muted);
 }
 
+export type ColorGrade = {
+  curve?: number;
+  black?: number;
+  white?: number;
+  shadow?: number;
+  highlight?: number;
+  contrast?: number;
+  saturation?: number;
+  warmth?: number;
+  tint?: number;
+  shadowTone?: [number, number, number];
+  highlightTone?: [number, number, number];
+  lutStrength?: number;
+};
+
+/** Whether this build has the colour grade (Looks, Gamma, LUT). */
+export function hasColorGrade(): boolean {
+  return typeof (nativeModule as Record<string, unknown>).setColorGrade === "function";
+}
+
+/** Filmic's Gamma and Looks, burned into the picture. Keys left out keep their value. */
+export function setColorGrade(grade: ColorGrade): void {
+  if (!hasColorGrade()) return;
+  native.setColorGrade(grade);
+}
+
+/** Loads a 3D `.cube` LUT, burned in; resolves with the cube size used. */
+export function loadLut(path: string): Promise<number> {
+  if (!hasColorGrade()) return Promise.reject(new Error("This build has no LUT support"));
+  return native.loadLut(path);
+}
+
+export function clearLut(): void {
+  if (!hasColorGrade()) return;
+  native.clearLut();
+}
+
 /**
  * The words viewers see on the slate while the picture is held. A build
  * without the slate sends black and ignores this.
