@@ -797,8 +797,11 @@ export function useBroadcast() {
 
   const setWhiteBalance = useCallback(async (mode: number) => {
     setWhiteBalanceState(mode);
-    // A preset ends kelvin mode on the native side; say so here too.
+    // A preset ends kelvin mode on the native side; say so here too, tint
+    // included, so the colour pad returns to neutral rather than keeping a
+    // tint the camera is no longer applying.
     setKelvin(null);
+    setTint(0);
     await Broadcaster.setWhiteBalance(mode).catch(() => {});
   }, []);
 

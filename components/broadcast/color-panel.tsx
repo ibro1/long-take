@@ -1,4 +1,4 @@
-import { Cloud, Lamp, Lightbulb, Sun } from "lucide-react-native";
+import { Cloud, Lamp, Lightbulb, RotateCcw, Sun } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { type LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -131,7 +131,21 @@ export function ColorPanel({
   return (
     <View style={styles.body}>
       <View style={styles.top}>
-        <Pad temp={temp} tint={tnt} enabled={manualWhiteBalance} onCommit={commit} />
+        <View style={{ flex: 1 }}>
+          <Pad temp={temp} tint={tnt} enabled={manualWhiteBalance} onCommit={commit} />
+          {/* Reset, where the other colour tabs keep theirs: back to auto
+              white balance, the pad and bars to neutral. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Reset white balance to auto"
+            onPress={() => onWhiteBalance(AWB_AUTO)}
+            hitSlop={8}
+            className="active:opacity-60"
+            style={styles.reset}
+          >
+            <RotateCcw size={20} color="#2E7BC6" strokeWidth={2.2} />
+          </Pressable>
+        </View>
         <Bar
           kind="temp"
           value={temp}
@@ -337,6 +351,17 @@ const styles = StyleSheet.create({
   body: { flex: 1, padding: 12, gap: 10 },
   top: { flex: 1, flexDirection: "row", gap: 14 },
   pad: { flex: 1, borderRadius: 6, overflow: "hidden" },
+  reset: {
+    position: "absolute",
+    top: 6,
+    left: 6,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   marker: {
     position: "absolute",
     width: 26,
