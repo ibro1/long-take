@@ -33,6 +33,13 @@ import {
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { Reticles as ReticlesView } from "@/components/broadcast/reticles";
 import { ZoomRocker } from "@/components/broadcast/zoom-rocker";
+import {
+  CenterWeightOverlay,
+  ManualControls,
+  METERING_ICON,
+  type MeteringMode,
+  MeteringModeBar,
+} from "@/components/broadcast/metering-modes";
 import { FramingGuides, type GuideSet } from "@/components/broadcast/framing-guides";
 import { ReadoutStrip } from "@/components/broadcast/readout-strip";
 import {
@@ -74,7 +81,6 @@ import {
   CloseIcon,
   DrawerIcon,
   FlipIcon,
-  FramingIcon,
   GoLiveIcon,
   GlobeIcon,
   LogIcon,
@@ -893,6 +899,9 @@ export default function BroadcastScreen() {
 
   /** Analytics (peaking / zebra / false colour) live behind one button, as in Filmic. */
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  // Filmic's reticle modes, behind the ring at the top of the leading column.
+  const [meterMode, setMeterMode] = useState<MeteringMode>("reticle");
+  const [meterBarOpen, setMeterBarOpen] = useState(false);
   /** Filmic's settings grid, opened over the viewfinder from the gear. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The page the settings panel opens on, or null for the grid. */
@@ -921,6 +930,7 @@ export default function BroadcastScreen() {
       !exposureLocked &&
       monitor === "off" &&
       panel === null &&
+      meterMode === "reticle" &&
       exposureMode === "auto",
     exposure,
     min: exposureRange.min,
@@ -1861,6 +1871,38 @@ export default function BroadcastScreen() {
    * first (the strip cannot show under one), and the strip always opens - on
    * air or held by the heat ladder it opens greyed and says why.
    */
+  /**
+   * Changing mode hands the camera to whatever the mode means: Reticle and
+   * Center Weight give focus and metering back to the camera (the pucks then
+   * steer them again), Manual starts the tapes from what the sensor is doing
+   * now so the picture does not jump.
+   */
+  const chooseMeterMode = (mode: MeteringMode) => {
+    setMeterMode(mode);
+    if (mode === "manual") {
+      if (capabilities?.manualSensor) void setExposureMode("manual");
+      if ((capabilities?.focusNear ?? 0) > 0) void setFocusDistance(focusDistance);
+      return;
+    }
+    exposurePoint.current = null;
+    if (exposureMode === "manual") void setExposureMode("auto");
+    if (manualFocus) void resumeAutoFocus();
+    if (mode === "center" && exposureLocked) void setExposureLock(false);
+  };
+  const meterRing = (size?: number) => (
+    <RingButton
+      icon={METERING_ICON[meterMode] as unknown as LucideIcon}
+      size={size}
+      label={meterMode === "reticle" ? "Reticle" : meterMode === "center" ? "Center Weight" : "Manual"}
+      active={meterBarOpen}
+      tone="accent"
+      onPress={() => {
+        setPanel(null);
+        setMeterBarOpen((open) => !open);
+      }}
+    />
+  );
+
   const toggleAnalytics = () => {
     setPanel(null);
     setAnalyticsOpen((open) => !open);
@@ -1997,7 +2039,22 @@ export default function BroadcastScreen() {
           the picture and are dragged to place each measurement. Drawn after the
           touch layer so a puck takes its own drag rather than the picture
           reading it as a pinch. Hidden while a panel covers the shot. */}
-      {panel === null && (capabilities?.available ?? false) ? (
+      {panel === null && meterMode === "center" ? <CenterWeightOverlay insets={reticleInsets} /> : null}
+      {panel === null && meterMode === "manual" ? (
+        <ManualControls
+          insets={reticleInsets}
+          fps={connection?.fps ?? 30}
+          isoRange={capabilities?.manualSensor ? (capabilities?.isoRange ?? null) : null}
+          exposureTimeRange={capabilities?.manualSensor ? (capabilities?.exposureTimeRange ?? null) : null}
+          iso={manualIso}
+          exposureNs={manualExposureNs}
+          onManualExposure={setManualExposure}
+          focusNear={capabilities?.focusNear ?? 0}
+          focusDistance={focusDistance}
+          onFocusDistance={setFocusDistance}
+        />
+      ) : null}
+      {panel === null && meterMode === "reticle" && (capabilities?.available ?? false) ? (
         <View pointerEvents="box-none" className="absolute inset-0">
           <Reticles
             canFocus={capabilities?.available ?? false}
@@ -2317,13 +2374,7 @@ export default function BroadcastScreen() {
               style={{ width: LEFT_COLUMN }}
             >
               <View pointerEvents="box-none" className="items-center gap-3">
-                <RingButton
-                  icon={FramingIcon}
-                  label={CONTROL.shape.label}
-                  active={settingsOpen && settingsOpenTo === "/settings/framing"}
-                  tone="accent"
-                  onPress={() => openSettings("/settings/framing")}
-                />
+                {meterRing()}
                 <StatusBadge state={badgeState} label={badgeLabel} />
               </View>
               <ColorDiamond
@@ -2401,7 +2452,7 @@ export default function BroadcastScreen() {
 
                 {/* The zoom rocker: the one slider on the glass. It springs back to
                     the middle on release, so it is a speed, not a position. */}
-                {panel === null ? (
+                {panel === null && meterMode !== "manual" ? (
                   <View
                     pointerEvents="box-none"
                     className="absolute bottom-0 top-0 justify-center"
@@ -2429,18 +2480,26 @@ export default function BroadcastScreen() {
                   pointerEvents="box-none"
                   className="absolute inset-x-0 bottom-3 items-center"
                 >
-                  <LiveInfoPanel
-                    fps={connection?.fps ?? null}
-                    resolution={connection ? `${connection.height}p` : null}
-                    live={live}
-                    recording={recording}
-                    troubled={troubled}
-                    dropped={dropped}
-                    battery={{ level: charge.level, charging: charge.charging }}
-                    warn={infoWarn}
-                    onPress={() => togglePanel("stats")}
-                    onLongPress={sayBattery}
-                  />
+                  {meterBarOpen ? (
+                    <MeteringModeBar
+                      mode={meterMode}
+                      onChange={chooseMeterMode}
+                      manualAvailable={(capabilities?.manualSensor ?? false) || (capabilities?.focusNear ?? 0) > 0}
+                    />
+                  ) : (
+                    <LiveInfoPanel
+                      fps={connection?.fps ?? null}
+                      resolution={connection ? `${connection.height}p` : null}
+                      live={live}
+                      recording={recording}
+                      troubled={troubled}
+                      dropped={dropped}
+                      battery={{ level: charge.level, charging: charge.charging }}
+                      warn={infoWarn}
+                      onPress={() => togglePanel("stats")}
+                      onLongPress={sayBattery}
+                    />
+                  )}
                 </View>
 
                 <View
@@ -2471,14 +2530,7 @@ export default function BroadcastScreen() {
             onLayout={(e) => setTopBar(Math.round(e.nativeEvent.layout.height))}
           >
             <View pointerEvents="box-none" className="flex-row items-center gap-2 px-3 py-2">
-              <RingButton
-                icon={FramingIcon}
-                size={40}
-                label={CONTROL.shape.label}
-                active={settingsOpen && settingsOpenTo === "/settings/framing"}
-                tone="accent"
-                onPress={() => openSettings("/settings/framing")}
-              />
+              {meterRing(40)}
               <StatusBadge state={badgeState} label={badgeLabel} />
               <View pointerEvents="box-none" className="flex-1 items-center">
                 {drawerPill}
@@ -2534,18 +2586,26 @@ export default function BroadcastScreen() {
             {ladder.quietHud ? null : <Notice text={notice.text} at={notice.at} tone={notice.tone} />}
             {panel === null ? (
               <View pointerEvents="box-none" className="items-center">
-                <LiveInfoPanel
-                  fps={connection?.fps ?? null}
-                  resolution={connection ? `${connection.height}p` : null}
-                  live={live}
-                  recording={recording}
-                  troubled={troubled}
-                  dropped={dropped}
-                  battery={{ level: charge.level, charging: charge.charging }}
-                  warn={infoWarn}
-                  onPress={() => togglePanel("stats")}
-                  onLongPress={sayBattery}
-                />
+                {meterBarOpen ? (
+                  <MeteringModeBar
+                    mode={meterMode}
+                    onChange={chooseMeterMode}
+                    manualAvailable={(capabilities?.manualSensor ?? false) || (capabilities?.focusNear ?? 0) > 0}
+                  />
+                ) : (
+                  <LiveInfoPanel
+                    fps={connection?.fps ?? null}
+                    resolution={connection ? `${connection.height}p` : null}
+                    live={live}
+                    recording={recording}
+                    troubled={troubled}
+                    dropped={dropped}
+                    battery={{ level: charge.level, charging: charge.charging }}
+                    warn={infoWarn}
+                    onPress={() => togglePanel("stats")}
+                    onLongPress={sayBattery}
+                  />
+                )}
               </View>
             ) : null}
           </View>
@@ -2584,7 +2644,7 @@ export default function BroadcastScreen() {
 
       {/* Portrait keeps the same rocker on the trailing edge, where the picture
           is otherwise empty of controls. */}
-      {!wide && panel === null ? (
+      {!wide && panel === null && meterMode !== "manual" ? (
         <View
           pointerEvents="box-none"
           className="absolute justify-center"
