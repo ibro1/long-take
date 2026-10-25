@@ -1327,7 +1327,9 @@ export default function BroadcastScreen() {
   // With torch and flip gone the bottom-left corner is empty; the operator's
   // controls all sit bottom right.
   const leftCornerIds: QuickControl[] = [];
-  const rightCornerIds = cornerIds;
+  // Pause holds a take in progress; with nothing running it has nothing to
+  // hold, so it appears only while live or recording (or still paused).
+  const rightCornerIds = cornerIds.filter((id) => id !== "pause" || live || recording || paused);
   const cornerDisc = (id: QuickControl) => {
     const control = CONTROL[id];
     return (
