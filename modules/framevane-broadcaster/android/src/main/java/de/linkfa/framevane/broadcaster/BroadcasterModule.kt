@@ -335,6 +335,7 @@ class BroadcasterModule : Module() {
        * Before the stream, so the muxer closes while its encoders are still
        * running rather than after they have been torn down.
        */
+      v.hideSlate()
       if (v.stream.isRecording) runCatching { v.stopRecording() }
       if (v.stream.isStreaming) v.stream.stopStream()
       // Stopping the stream stops the encoders with it, so they have to be

@@ -63,6 +63,8 @@ export const ha: Record<StringKey, string> = {
   "control.pause": "Dakata",
   "control.paused": "An dakata",
   "control.pauseHint": "Riƙe hoton ba tare da yanke haɗi ba.",
+  "slate.title": "Za mu dawo yanzu",
+  "slate.message": "Shirin zai ci gaba nan ba da jimawa ba",
   "control.flip": "Juya",
   "control.flipHint": "Sauya tsakanin kyamarar gaba da ta baya.",
   "control.settings": "Saituna",

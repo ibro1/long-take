@@ -64,6 +64,8 @@ export const en = {
   "control.pause": "Pause",
   "control.paused": "Paused",
   "control.pauseHint": "Hold the picture without dropping the connection.",
+  "slate.title": "We'll be right back",
+  "slate.message": "The broadcast will continue shortly",
   "control.flip": "Flip",
   "control.flipHint": "Switch between the front and back cameras.",
   "control.settings": "Settings",

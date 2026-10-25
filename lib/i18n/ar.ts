@@ -63,6 +63,8 @@ export const ar: Record<StringKey, string> = {
   "control.pause": "إيقاف مؤقت",
   "control.paused": "متوقف",
   "control.pauseHint": "تثبيت الصورة دون قطع الاتصال.",
+  "slate.title": "سنعود بعد قليل",
+  "slate.message": "سيستمر البث قريبًا",
   "control.flip": "تبديل",
   "control.flipHint": "التبديل بين الكاميرا الأمامية والخلفية.",
   "control.settings": "الإعدادات",

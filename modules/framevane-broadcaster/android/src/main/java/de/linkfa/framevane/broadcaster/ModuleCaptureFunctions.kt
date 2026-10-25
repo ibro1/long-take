@@ -16,6 +16,15 @@ internal fun ModuleDefinitionBuilder.captureFunctions() {
    */
   AsyncFunction("setVideoMuted") { muted: Boolean -> view().setVideoMuted(muted) }
 
+  /** The words on the pause slate, in the operator's language. Kept for the next pause. */
+  Function("setPauseSlate") { title: String, message: String ->
+    BroadcasterView.current?.let {
+      it.slateTitle = title
+      it.slateMessage = message
+    }
+    Unit
+  }
+
   Function("isVideoMuted") { BroadcasterView.current?.isVideoMuted() ?: false }
 
   /**

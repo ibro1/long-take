@@ -124,6 +124,7 @@ import {
   setMonitor,
   setMonitorOptions,
   setScreenBrightness,
+  setPauseSlate,
   setThermalBitrateCap,
 } from "@/modules/framevane-broadcaster";
 
@@ -1244,7 +1245,12 @@ export default function BroadcastScreen() {
       on: paused,
       labelCarriesState: true,
       tone: "warn",
-      onPress: togglePause,
+      onPress: () => {
+        // Viewers see the slate in the operator's language, read at the
+        // moment of pausing so a language change since is honoured.
+        if (!paused) setPauseSlate(t("slate.title"), t("slate.message"));
+        void togglePause();
+      },
     },
     flip: {
       icon: FlipIcon,
@@ -1331,9 +1337,9 @@ export default function BroadcastScreen() {
   // With torch and flip gone the bottom-left corner is empty; the operator's
   // controls all sit bottom right.
   const leftCornerIds: QuickControl[] = [];
-  // Pause holds a take in progress; with nothing running it has nothing to
-  // hold, so it appears only while live or recording (or still paused).
-  const rightCornerIds = cornerIds.filter((id) => id !== "pause" || live || recording || paused);
+  // Pause is a live-stream control - it holds the picture behind a "be right
+  // back" slate for viewers - so it appears only on air (or while still paused).
+  const rightCornerIds = cornerIds.filter((id) => id !== "pause" || live || paused);
   const cornerDisc = (id: QuickControl) => {
     const control = CONTROL[id];
     return (

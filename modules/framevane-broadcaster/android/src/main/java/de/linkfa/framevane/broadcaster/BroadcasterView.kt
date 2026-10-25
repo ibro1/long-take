@@ -6,6 +6,11 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.text.TextPaint
 import android.graphics.Rect
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -29,6 +34,7 @@ import com.pedro.encoder.input.sources.OrientationConfig
 import com.pedro.encoder.input.sources.OrientationForced
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
 import com.pedro.encoder.input.gl.render.filters.BaseFilterRender
+import com.pedro.encoder.input.gl.render.filters.`object`.ImageObjectFilterRender
 import com.pedro.encoder.input.sources.video.Camera2Source
 import com.pedro.encoder.input.video.CameraCallbacks
 import com.pedro.encoder.input.video.CameraHelper
@@ -1801,6 +1807,18 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   fun setVideoMuted(muted: Boolean) {
     val gl = stream.getGlInterface()
+    // A slate first: viewers who see a card saying the class is coming back
+    // wait; viewers who see black assume it ended. Black is the fallback.
+    if (muted && showSlate()) {
+      log(LOG_INFO, "Picture held behind the slate")
+      return
+    }
+    if (!muted && slateFilter != null) {
+      hideSlate()
+      runCatching { gl.unMuteVideo() }
+      log(LOG_INFO, "Picture resumed")
+      return
+    }
     runCatching {
       if (muted) gl.muteVideo() else gl.unMuteVideo()
     }.onFailure {
@@ -1811,7 +1829,87 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   }
 
   fun isVideoMuted(): Boolean =
-    runCatching { stream.getGlInterface().isVideoMuted() }.getOrNull() ?: false
+    slateFilter != null ||
+      (runCatching { stream.getGlInterface().isVideoMuted() }.getOrNull() ?: false)
+
+  /** What the pause slate says; set from JavaScript before pausing, in the operator's language. */
+  @Volatile
+  var slateTitle: String = "We'll be right back"
+
+  @Volatile
+  var slateMessage: String = ""
+
+  @Volatile
+  private var slateFilter: ImageObjectFilterRender? = null
+
+  /**
+   * Cover the whole encoded frame with a drawn card. An image filter on the
+   * GL chain rather than muteVideo, because muteVideo sends black and nothing
+   * else can be drawn over it. The camera keeps running underneath, so resume
+   * is instant. Live is landscape-only, so the card is drawn at the stream's
+   * own shape. False if it could not be put up, and the caller sends black.
+   */
+  private fun showSlate(): Boolean {
+    val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return false
+    return runCatching {
+      hideSlate()
+      val w = if (portrait) videoHeight else videoWidth
+      val h = if (portrait) videoWidth else videoHeight
+      val filter = ImageObjectFilterRender()
+      gl.setFilter(filter)
+      filter.setImage(drawSlate(w, h))
+      filter.setScale(100f, 100f)
+      filter.setPosition(0f, 0f)
+      slateFilter = filter
+      true
+    }.getOrElse {
+      log(LOG_WARN, "Could not show the pause slate: ${it.message}")
+      false
+    }
+  }
+
+  fun hideSlate() {
+    if (slateFilter == null) return
+    runCatching { stream.getGlInterface().clearFilters() }
+    slateFilter = null
+  }
+
+  private fun drawSlate(w: Int, h: Int): Bitmap {
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    canvas.drawColor(Color.rgb(14, 15, 18))
+    val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(242, 169, 0) }
+    // A short amber rule above the words: the app's own accent, so the card
+    // reads as made rather than as an error screen.
+    val ruleW = w * 0.06f
+    canvas.drawRoundRect(
+      w / 2f - ruleW / 2f, h * 0.36f, w / 2f + ruleW / 2f, h * 0.36f + h * 0.008f,
+      h * 0.004f, h * 0.004f, accent,
+    )
+    val title = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+      color = Color.WHITE
+      textSize = h * 0.085f
+      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+      textAlign = Paint.Align.CENTER
+    }
+    fitText(title, slateTitle, w * 0.86f)
+    canvas.drawText(slateTitle, w / 2f, h * 0.5f, title)
+    if (slateMessage.isNotBlank()) {
+      val body = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(170, 174, 182)
+        textSize = h * 0.042f
+        textAlign = Paint.Align.CENTER
+      }
+      fitText(body, slateMessage, w * 0.86f)
+      canvas.drawText(slateMessage, w / 2f, h * 0.6f, body)
+    }
+    return bitmap
+  }
+
+  /** Shrink to fit one line rather than run off the frame in a long translation. */
+  private fun fitText(paint: Paint, text: String, maxWidth: Float) {
+    while (paint.measureText(text) > maxWidth && paint.textSize > 8f) paint.textSize *= 0.92f
+  }
 
   // --- Display-only monitoring (peaking / zebra / false colour / clipping)
   //
@@ -2216,6 +2314,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    * what the button on screen does rather than only close the notification.
    */
   fun stopBroadcast() {
+    // A slate left up would be the first thing on the next take.
+    hideSlate()
     if (stream.isRecording) runCatching { stopRecording() }
     if (stream.isStreaming) runCatching { stream.stopStream() }
     /**

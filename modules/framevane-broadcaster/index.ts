@@ -658,6 +658,16 @@ export function setVideoMuted(muted: boolean): Promise<void> {
   return native.setVideoMuted(muted);
 }
 
+/**
+ * The words viewers see on the slate while the picture is held. A build
+ * without the slate sends black and ignores this.
+ */
+export function setPauseSlate(title: string, message: string): void {
+  const fn = (nativeModule as Record<string, unknown>).setPauseSlate;
+  if (typeof fn !== "function") return;
+  native.setPauseSlate(title, message);
+}
+
 export function isVideoMuted(): boolean {
   return native.isVideoMuted();
 }
