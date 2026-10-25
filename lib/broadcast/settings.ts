@@ -211,7 +211,17 @@ export type Preferences = {
   defaultHeight: number;
   /** The frame rate a new destination starts at, as above. */
   defaultFps: number;
+  /**
+   * A take recorded with no destination - the app's main job. Filmic's
+   * Encoding and Frame Rate pages: the picture height (16:9), the frame rate,
+   * and how generous the bitrate is.
+   */
+  takeHeight: number;
+  takeFps: number;
+  takeQuality: TakeQuality;
 };
+
+export type TakeQuality = "economy" | "standard" | "high";
 
 export type LanguageChoice = "auto" | "en" | "ha" | "ar";
 
@@ -271,6 +281,10 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   // The same picture DEFAULT_SETTINGS in pairing.ts gives a destination.
   defaultHeight: 720,
   defaultFps: 30,
+  // 1080p30 at a generous bitrate: what a phone records well without heat.
+  takeHeight: 1080,
+  takeFps: 30,
+  takeQuality: "standard",
 };
 
 /**
@@ -303,6 +317,47 @@ export function defaultPicture(preferences: Preferences = loadPreferences()): {
     ? preferences.defaultFps
     : 30;
   return { width: picture.width, height: picture.height, fps };
+}
+
+/** Take sizes, 16:9. 4K is offered; a lens that cannot do it falls back with a notice. */
+export const TAKE_PICTURES = [
+  { label: "720p HD", width: 1280, height: 720 },
+  { label: "1080p Full HD", width: 1920, height: 1080 },
+  { label: "1440p QHD", width: 2560, height: 1440 },
+  { label: "4K UHD 2160p", width: 3840, height: 2160 },
+] as const;
+
+/** Filmic's standard rates. 48 and 50 are left out: few Android sensors deliver them. */
+export const TAKE_FRAME_RATES = [24, 25, 30, 60] as const;
+
+export const TAKE_QUALITIES: { value: TakeQuality; label: string; detail: string }[] = [
+  { value: "economy", label: "Economy", detail: "Smaller files, fine for talking heads" },
+  { value: "standard", label: "Standard", detail: "Clean detail for most shooting" },
+  { value: "high", label: "High", detail: "Most detail for editing; large files" },
+];
+
+/** Bits per second at 30 fps, per height and quality. */
+const TAKE_BITRATES: Record<number, Record<TakeQuality, number>> = {
+  720: { economy: 5_000_000, standard: 8_000_000, high: 12_000_000 },
+  1080: { economy: 10_000_000, standard: 16_000_000, high: 24_000_000 },
+  1440: { economy: 16_000_000, standard: 24_000_000, high: 36_000_000 },
+  2160: { economy: 30_000_000, standard: 45_000_000, high: 60_000_000 },
+};
+
+/**
+ * The encoder picture for a take with no destination. 60 fps gets half as
+ * much again: twice the frames, but each changes less from the last.
+ */
+export function takePicture(preferences: Preferences = loadPreferences()): {
+  width: number;
+  height: number;
+  fps: number;
+  videoBitrate: number;
+} {
+  const picture = TAKE_PICTURES.find((p) => p.height === preferences.takeHeight) ?? TAKE_PICTURES[1];
+  const fps = (TAKE_FRAME_RATES as readonly number[]).includes(preferences.takeFps) ? preferences.takeFps : 30;
+  const quality = TAKE_BITRATES[picture.height][preferences.takeQuality] ?? TAKE_BITRATES[picture.height].standard;
+  return { width: picture.width, height: picture.height, fps, videoBitrate: Math.round(quality * (fps > 30 ? 1.5 : 1)) };
 }
 
 /**

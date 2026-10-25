@@ -2914,6 +2914,7 @@ const CameraSettingsContext = createContext<CameraSettings | null>(null);
 
 function HardwareSettingsPage() {
   const c = useContext(CameraSettingsContext);
+  const { width, height } = useWindowDimensions();
   if (!c) return null;
   const current = c.cameras.find((entry) => entry.current);
   return (
@@ -2934,6 +2935,22 @@ function HardwareSettingsPage() {
           onPress={() => c.setAutoFocus(!c.autoFocus)}
         />
         {c.hasTorch ? <SwitchRow label="Torch" on={c.torch} onPress={c.toggleTorch} /> : null}
+      </Group>
+      {/* Filmic's Orientation Lock: off, the app turns with the phone; on, it
+          holds the way the phone is held now. */}
+      <Group>
+        <SwitchRow
+          label="Orientation lock"
+          detail={
+            c.orientation === "auto"
+              ? "The picture turns with the phone"
+              : `Held in ${c.orientation} until switched off`
+          }
+          on={c.orientation !== "auto"}
+          onPress={() =>
+            c.setOrientation(c.orientation !== "auto" ? "auto" : width > height ? "landscape" : "portrait")
+          }
+        />
       </Group>
       {c.antiFlickerModes.length > 1 ? (
         <Group title="Anti-flicker" note="Matches the mains frequency so lights do not band.">

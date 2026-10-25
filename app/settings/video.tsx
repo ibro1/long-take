@@ -26,6 +26,9 @@ import {
   savePreferences,
   saveSettings,
   SPLIT_BYTES,
+  TAKE_FRAME_RATES,
+  TAKE_PICTURES,
+  TAKE_QUALITIES,
 } from "@/lib/broadcast/settings";
 import * as Broadcaster from "@/modules/framevane-broadcaster";
 import type { RecordingFile } from "@/modules/framevane-broadcaster";
@@ -96,8 +99,36 @@ export default function VideoSettingsScreen() {
   return (
     <Page
       title="Video"
-      intro="Applied the next time you go live, except where it says otherwise."
+      intro="Encoding and frame rate apply to recordings; the rest applies the next time you go live."
     >
+      {/* Filmic's Encoding and Frame Rate: what a take is recorded at when
+          nothing is going out - the app's main job. A destination keeps its own. */}
+      <Group
+        title="Encoding"
+        footer="For recordings with no destination. Applied when you press record. A size or rate this camera cannot do falls back to 1080p 30, and the app says so."
+      >
+        <ChoiceRow
+          label="Resolution"
+          value={preferences.takeHeight}
+          options={TAKE_PICTURES.map((p) => ({ label: p.label, value: p.height as number }))}
+          onChange={(takeHeight) => updatePreferences({ takeHeight })}
+        />
+        <ChoiceRow
+          label="Quality"
+          value={preferences.takeQuality}
+          options={TAKE_QUALITIES.map((q) => ({ label: q.label, value: q.value }))}
+          onChange={(takeQuality) => updatePreferences({ takeQuality })}
+        />
+      </Group>
+      <Group title="Frame rate" footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for motion.">
+        <ChoiceRow
+          label="Frames per second"
+          value={preferences.takeFps}
+          options={TAKE_FRAME_RATES.map((fps) => ({ label: `${fps}`, value: fps as number }))}
+          onChange={(takeFps) => updatePreferences({ takeFps })}
+        />
+      </Group>
+
       <Group
         title="Codec"
         footer={

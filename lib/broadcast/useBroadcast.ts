@@ -36,6 +36,7 @@ import {
   recordQualityFor,
   savePreferences,
   SPLIT_BYTES,
+  takePicture,
 } from "./settings";
 
 /**
@@ -1193,6 +1194,23 @@ export function useBroadcast() {
     }
     if (!roomToRecord()) return;
 
+    // A take with nothing going out records at the operator's own Encoding
+    // and Frame Rate choices, not at whatever the encoder was last left at.
+    // Only when idle: a recording under a live stream shares its encoder.
+    if (!isStreamingNow()) {
+      const wanted = { ...loadSettings(), ...takePicture() };
+      const running = (() => {
+        try {
+          return Broadcaster.encoderPicture();
+        } catch {
+          return null;
+        }
+      })();
+      if (!running || !samePicture(running, wanted)) {
+        await Broadcaster.configure(wanted).catch(() => {});
+      }
+    }
+
     try {
       const path = await Broadcaster.startRecording();
       // The event confirms this; setting it here means the red dot appears on
@@ -1201,6 +1219,20 @@ export function useBroadcast() {
       setRecordingSince(Date.now());
       if (path) notify("Recording to the phone");
     } catch {
+      // Most often a size or rate this lens cannot record. Fall back to
+      // 1080p30 once, and say so, rather than leave the operator with nothing.
+      if (!isStreamingNow()) {
+        try {
+          await Broadcaster.configure({ ...loadSettings(), width: 1920, height: 1080, fps: 30, videoBitrate: 16_000_000 });
+          await Broadcaster.startRecording();
+          setRecording(true);
+          setRecordingSince(Date.now());
+          notify("This camera cannot record that size or rate - recording at 1080p 30 instead", "bad");
+          return;
+        } catch {
+          // Fall through to the plain failure.
+        }
+      }
       notify("The phone would not start recording", "bad");
     }
   }, [recording, notify, roomToRecord]);
