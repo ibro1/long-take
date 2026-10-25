@@ -446,10 +446,12 @@ const tileStyles = StyleSheet.create({
   arrow: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   stepValue: { color: paper.ink, fontSize: 17, fontWeight: "600" },
   stepDetail: { color: paper.inkMuted, fontSize: 12 },
-  fpsRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 14, paddingHorizontal: 8 },
-  fps: { width: 48, height: 48, borderRadius: 29, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "transparent" },
+  // Every rate shares the row equally, so all eight fit whatever the panel's
+  // width - 120 and 240 were cut off the end of a fixed-width row.
+  fpsRow: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 14, paddingHorizontal: 4 },
+  fps: { flex: 1, aspectRatio: 1, maxWidth: 52, marginHorizontal: 2, borderRadius: 26, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "transparent" },
   fpsOn: { borderColor: paper.ink },
-  fpsText: { color: paper.inkMuted, fontSize: 19 },
+  fpsText: { color: paper.inkMuted, fontSize: 17 },
 });
 
 function recordingsSummary(recordings: RecordingFile[]): string {
