@@ -1031,6 +1031,18 @@ export default function BroadcastScreen() {
   );
 
   // Nothing yet, rather than the wrong thing. The check takes a frame or two.
+  // What the Presets page borrows from the viewfinder; filled in further down,
+  // once the functions it lends exist. Hooks stay above the early returns.
+  const presetActionsRef = useRef({ save: (_: string) => {}, apply: (_: Preset) => {}, reset: () => {} });
+  useEffect(() => {
+    registerPresetActions({
+      save: (name) => presetActionsRef.current.save(name),
+      apply: (preset) => presetActionsRef.current.apply(preset),
+      reset: () => presetActionsRef.current.reset(),
+    });
+    return () => registerPresetActions(null);
+  }, []);
+
   if (!answered) {
     return <SafeAreaView className="flex-1 bg-background" />;
   }
@@ -1488,7 +1500,8 @@ export default function BroadcastScreen() {
     notify("Camera reset to auto");
   };
   // Lent to the Presets page through a ref, so it always calls this render's.
-  const presetActionsRef = useRef({ save: (_: string) => {}, apply: (_: Preset) => {}, reset: () => {} });
+  // The ref and its registration are hooks, declared above the permission
+  // early returns; only the assignment is down here.
   presetActionsRef.current = {
     save: (name: string) => {
       savePreset(presetSnapshot(name));
@@ -1497,15 +1510,6 @@ export default function BroadcastScreen() {
     apply: applyPreset,
     reset: resetCamera,
   };
-  useEffect(() => {
-    registerPresetActions({
-      save: (name) => presetActionsRef.current.save(name),
-      apply: (preset) => presetActionsRef.current.apply(preset),
-      reset: () => presetActionsRef.current.reset(),
-    });
-    return () => registerPresetActions(null);
-  }, []);
-
   const panelBody =
     // The colour panel is hosted on its own, beside the leading column.
     panel === null || panel === "image" || panel === "presets" ? null : panel === "log" ? (
