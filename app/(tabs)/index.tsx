@@ -2339,7 +2339,8 @@ export default function BroadcastScreen() {
         pointerEvents="box-none"
         className="absolute inset-y-0 left-3 flex-row items-center justify-center gap-2"
       >
-        <View pointerEvents="none" className="items-start">
+        {/* box-none, not none: the gain bar on the meter takes a drag. */}
+        <View pointerEvents="box-none" className="items-start">
           <Meter muted={muted} maxFps={ladder.levelMeterFps} />
         </View>
 
@@ -2554,7 +2555,8 @@ export default function BroadcastScreen() {
             >
               {micControl}
 
-              <View pointerEvents="none" className="flex-1 items-center justify-center py-2">
+              {/* box-none, not none: the gain bar on the meter takes a drag. */}
+              <View pointerEvents="box-none" className="flex-1 items-center justify-center py-2">
                 <Meter muted={muted} maxFps={ladder.levelMeterFps} />
               </View>
 
