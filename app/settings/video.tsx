@@ -1,8 +1,9 @@
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { View } from "react-native";
+import { ChevronLeft, ChevronRight } from "lucide-react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
-import { ChoiceRow, Group, NavRow, Page, SwitchRow, useSettingsNav } from "@/components/settings/chrome";
+import { ChoiceRow, Group, NavRow, Page, paper, SwitchRow, useSettingsNav } from "@/components/settings/chrome";
 import {
   CODEC_LABEL,
   codecOptions,
@@ -48,6 +49,7 @@ import type { RecordingFile } from "@/modules/framevane-broadcaster";
  */
 export default function VideoSettingsScreen() {
   const nav = useSettingsNav();
+  const [tab, setTab] = useState<"encoding" | "framerate" | "recording">("encoding");
   const [settings, setSettings] = useState<PhoneEncoderSettings>(() => loadSettings());
   const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
   const [codecs, setCodecs] = useState(() => codecSupport());
@@ -97,35 +99,37 @@ export default function VideoSettingsScreen() {
   );
 
   return (
-    <Page
-      title="Video"
-      intro="Encoding and frame rate apply to recordings; the rest applies the next time you go live."
-    >
-      {/* Filmic's Encoding and Frame Rate: what a take is recorded at when
-          nothing is going out - the app's main job. A destination keeps its own. */}
-      <Group
-        title="Encoding"
-        footer="For recordings with no destination. Applied when you press record. A size or rate this camera cannot do falls back to 1080p 30, and the app says so."
-      >
-        <ChoiceRow
-          label="Resolution"
-          value={preferences.takeHeight}
-          options={TAKE_PICTURES.map((p) => ({ label: p.label, value: p.height as number }))}
-          onChange={(takeHeight) => updatePreferences({ takeHeight })}
-        />
-        <ChoiceRow
-          label="Quality"
+    <Page title="Video">
+      {/* Filmic's Video page: tabs rather than one long list. Encoding and
+          Frame Rate are what a take is recorded at - the app's main job. */}
+      <TabBar
+        tabs={[
+          { id: "encoding", label: "Encoding" },
+          { id: "framerate", label: "Frame Rate" },
+          { id: "recording", label: "Recording" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+
+      {tab === "encoding" ? (
+        <>
+      <Group footer="For recordings with no destination; a destination keeps its own. A size this camera cannot record falls back to 1080p, and the app says so.">
+        <View style={tileStyles.row}>
+          {TAKE_PICTURES.map((p) => (
+            <Tile
+              key={p.height}
+              label={p.height === 2160 ? "4K" : `${p.height}p`}
+              detail={p.height === 2160 ? "UHD" : p.height === 1440 ? "QHD" : p.height === 1080 ? "Full HD" : "HD"}
+              on={preferences.takeHeight === p.height}
+              onPress={() => updatePreferences({ takeHeight: p.height })}
+            />
+          ))}
+        </View>
+        <Stepper
+          options={TAKE_QUALITIES}
           value={preferences.takeQuality}
-          options={TAKE_QUALITIES.map((q) => ({ label: q.label, value: q.value }))}
           onChange={(takeQuality) => updatePreferences({ takeQuality })}
-        />
-      </Group>
-      <Group title="Frame rate" footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for motion.">
-        <ChoiceRow
-          label="Frames per second"
-          value={preferences.takeFps}
-          options={TAKE_FRAME_RATES.map((fps) => ({ label: `${fps}`, value: fps as number }))}
-          onChange={(takeFps) => updatePreferences({ takeFps })}
         />
       </Group>
 
@@ -175,6 +179,34 @@ export default function VideoSettingsScreen() {
           onPress={() => update({ preferHardwareCodec: !settings.preferHardwareCodec })}
         />
       </Group>
+        </>
+      ) : null}
+
+      {tab === "framerate" ? (
+        <Group footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for smooth motion. A rate this camera cannot record falls back to 30.">
+          <View style={tileStyles.fpsRow}>
+            {TAKE_FRAME_RATES.map((fps) => {
+              const on = preferences.takeFps === fps;
+              return (
+                <Pressable
+                  key={fps}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${fps} frames per second`}
+                  accessibilityState={{ selected: on }}
+                  onPress={() => updatePreferences({ takeFps: fps })}
+                  className="active:opacity-60"
+                  style={[tileStyles.fps, on && tileStyles.fpsOn]}
+                >
+                  <Text style={[tileStyles.fpsText, on && { color: paper.ink }]}>{fps}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Group>
+      ) : null}
+
+      {tab === "recording" ? (
+        <>
 
       <Group
         title="New destinations"
@@ -277,9 +309,115 @@ export default function VideoSettingsScreen() {
           under Shape.
         </Text>
       </View>
+        </>
+      ) : null}
     </Page>
   );
 }
+
+/** Filmic's tab strip: the chosen tab white with an accent edge, the rest grey. */
+function TabBar<T extends string>({
+  tabs,
+  value,
+  onChange,
+}: {
+  tabs: { id: T; label: string }[];
+  value: T;
+  onChange: (id: T) => void;
+}) {
+  return (
+    <View style={tileStyles.tabs}>
+      {tabs.map((t) => {
+        const on = t.id === value;
+        return (
+          <Pressable
+            key={t.id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: on }}
+            onPress={() => onChange(t.id)}
+            style={[tileStyles.tab, on && tileStyles.tabOn]}
+          >
+            <Text style={[tileStyles.tabText, on && { color: paper.ink, fontWeight: "600" }]}>{t.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function Tile({
+  label,
+  detail,
+  on,
+  onPress,
+}: {
+  label: string;
+  detail: string;
+  on: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label} ${detail}`}
+      accessibilityState={{ selected: on }}
+      onPress={onPress}
+      className="active:opacity-60"
+      style={[tileStyles.tile, on && tileStyles.tileOn]}
+    >
+      <Text style={[tileStyles.tileLabel, on && { color: paper.accentInk }]}>{label}</Text>
+      <Text style={[tileStyles.tileDetail, on && { color: paper.accentInk }]}>{detail}</Text>
+    </Pressable>
+  );
+}
+
+/** Filmic's quality picker: one value between two arrows. */
+function Stepper<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string; detail: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  const i = Math.max(0, options.findIndex((o) => o.value === value));
+  const step = (d: number) => onChange(options[(i + d + options.length) % options.length].value);
+  return (
+    <View style={tileStyles.stepper}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Lower quality" onPress={() => step(-1)} hitSlop={8} style={tileStyles.arrow}>
+        <ChevronLeft size={28} color={paper.ink} />
+      </Pressable>
+      <View style={{ flex: 1, alignItems: "center" }}>
+        <Text style={tileStyles.stepValue}>{options[i].label} quality</Text>
+        <Text style={tileStyles.stepDetail}>{options[i].detail}</Text>
+      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel="Higher quality" onPress={() => step(1)} hitSlop={8} style={tileStyles.arrow}>
+        <ChevronRight size={28} color={paper.ink} />
+      </Pressable>
+    </View>
+  );
+}
+
+const tileStyles = StyleSheet.create({
+  tabs: { flexDirection: "row", borderRadius: 8, overflow: "hidden", backgroundColor: paper.track },
+  tab: { flex: 1, paddingVertical: 12, alignItems: "center", borderTopWidth: 3, borderTopColor: "transparent" },
+  tabOn: { backgroundColor: paper.card, borderTopColor: paper.accent },
+  tabText: { color: paper.inkMuted, fontSize: 15 },
+  row: { flexDirection: "row", gap: 8, padding: 12 },
+  tile: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center", backgroundColor: paper.page },
+  tileOn: { backgroundColor: paper.accent },
+  tileLabel: { color: paper.ink, fontSize: 18, fontWeight: "600" },
+  tileDetail: { color: paper.inkMuted, fontSize: 11 },
+  stepper: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingBottom: 12 },
+  arrow: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  stepValue: { color: paper.ink, fontSize: 17, fontWeight: "600" },
+  stepDetail: { color: paper.inkMuted, fontSize: 12 },
+  fpsRow: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 14 },
+  fps: { width: 58, height: 58, borderRadius: 29, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "transparent" },
+  fpsOn: { borderColor: paper.ink },
+  fpsText: { color: paper.inkMuted, fontSize: 22 },
+});
 
 function recordingsSummary(recordings: RecordingFile[]): string {
   if (recordings.length === 0) return "Nothing on the phone yet";
