@@ -31,10 +31,13 @@ export function MonitoringSelector({
   value,
   onChange,
   disabled,
+  reason = "off on air",
 }: {
   readonly value: MonitorMode;
   readonly onChange: (mode: MonitorMode) => void;
   readonly disabled?: boolean;
+  /** Why it is disabled, said in the caption so a tap never looks ignored. */
+  readonly reason?: string;
 }) {
   const current = MODES.find((m) => m.mode === value) ?? MODES[0];
   return (
@@ -62,7 +65,7 @@ export function MonitoringSelector({
       </View>
       {/* The active aid, named once below the strip - the icons carry it, the
           word confirms it without crowding each segment. */}
-      <Text style={styles.caption}>{disabled ? "off on air" : current.label}</Text>
+      <Text style={styles.caption}>{disabled ? reason : current.label}</Text>
     </View>
   );
 }

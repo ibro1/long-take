@@ -835,9 +835,13 @@ export default function BroadcastScreen() {
    */
   const ladderStep = useThermalLadder(thermal, viewPrefs.thermalLadder);
   const ladder = useMemo(() => ladderEffects(ladderStep), [ladderStep]);
+  // The heat ladder takes the aids away only while a take is running - that is
+  // when the heat costs something. Off air a warm phone (Android says "light"
+  // just from being held) must not silently lock the operator out of peaking.
+  const aidsHeld = ladder.aidsOff && (live || recording);
   useEffect(() => {
-    if (ladder.aidsOff && monitor !== "off") applyMonitor("off");
-  }, [ladder.aidsOff, monitor, applyMonitor]);
+    if (aidsHeld && monitor !== "off") applyMonitor("off");
+  }, [aidsHeld, monitor, applyMonitor]);
   useEffect(() => {
     setThermalBitrateCap(ladder.bitrateCap);
   }, [ladder.bitrateCap]);
@@ -1840,14 +1844,10 @@ export default function BroadcastScreen() {
 
   /**
    * Analytics never just does nothing: a panel over the picture is closed
-   * first (the strip cannot show under one), and while the heat ladder has the
-   * aids paused, the button says so.
+   * first (the strip cannot show under one), and the strip always opens - on
+   * air or held by the heat ladder it opens greyed and says why.
    */
   const toggleAnalytics = () => {
-    if (ladder.aidsOff) {
-      notify("Analytics are paused while the phone cools down");
-      return;
-    }
     setPanel(null);
     setAnalyticsOpen((open) => !open);
   };
@@ -2209,7 +2209,7 @@ export default function BroadcastScreen() {
           from its button, as Filmic keeps them: there when wanted, not parked
           over the shot. Cleared and disabled on air - a focusing help, not
           something that goes out. */}
-      {analyticsOpen && panel === null && !ladder.aidsOff ? (
+      {analyticsOpen && panel === null ? (
         <View
           pointerEvents="box-none"
           style={
@@ -2218,7 +2218,12 @@ export default function BroadcastScreen() {
               : { position: "absolute", top: topBar + 36, right: 12 }
           }
         >
-          <MonitoringSelector value={monitor} onChange={applyMonitor} disabled={live} />
+          <MonitoringSelector
+            value={monitor}
+            onChange={applyMonitor}
+            disabled={live || aidsHeld}
+            reason={live ? "off on air" : "paused - phone is warm"}
+          />
         </View>
       ) : null}
 
