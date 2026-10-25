@@ -270,10 +270,12 @@ export function SettingsGrid({
       style={{ zIndex: 50, justifyContent: typing ? "flex-start" : "center", paddingTop: typing ? 8 : 0 }}
       onLayout={(e) => setOverlayHeight(e.nativeEvent.layout.height)}
     >
+      {/* Outside the panel steps back a page, as Filmic does; only from the
+          main grid does it close the panel. The same as Android's back. */}
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Close settings"
-        onPress={onClose}
+        accessibilityLabel={stack.length > 0 ? "Back" : "Close settings"}
+        onPress={() => (stack.length > 0 ? nav.back() : onClose())}
         className="absolute inset-0"
         style={{ backgroundColor: "rgba(0,0,0,0.45)" }}
       />
