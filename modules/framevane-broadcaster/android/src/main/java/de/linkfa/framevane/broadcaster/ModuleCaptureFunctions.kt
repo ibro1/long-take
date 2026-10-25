@@ -32,6 +32,16 @@ internal fun ModuleDefinitionBuilder.captureFunctions() {
    * written. Framevane archives server-side already, so this is the copy that
    * survives the uplink failing entirely.
    */
+  /**
+   * Timelapse for the next off-air take: frames captured per second, or 0
+   * for a normal take. Played back at the take's own frame rate, without
+   * sound. Ignored while live.
+   */
+  Function("setTimelapse") { captureFps: Int ->
+    TimelapseOptions.captureFps = captureFps.coerceAtLeast(0)
+    Unit
+  }
+
   AsyncFunction("startRecording") { view().startRecording() }
 
   AsyncFunction("stopRecording") { view().stopRecording() }

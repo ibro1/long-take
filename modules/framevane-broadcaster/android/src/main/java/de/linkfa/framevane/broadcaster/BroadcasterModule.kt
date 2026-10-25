@@ -277,6 +277,8 @@ class BroadcasterModule : Module() {
         if (SUPPORTED_SCHEMES.none { url.startsWith("$it://", ignoreCase = true) }) {
           throw UnsupportedDestinationException()
         }
+        // A broadcast is real time: no frame limit left over from a timelapse.
+        if (!v.stream.isRecording) v.disarmTimelapse(force = true)
         if (!v.ensurePrepared()) throw PrepareFailedException()
         // Both of these have to happen before the socket opens: the library
         // ignores a passphrase set on a running stream, and the latency only

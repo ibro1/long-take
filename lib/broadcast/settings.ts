@@ -219,6 +219,10 @@ export type Preferences = {
   takeHeight: number;
   takeFps: number;
   takeQuality: TakeQuality;
+  /** Filmic's Standard / Timelapse switch, for takes with no destination. */
+  takeMode: "standard" | "timelapse";
+  /** Timelapse: frames captured per second; played back at takeFps. */
+  timelapseCaptureFps: number;
   /** The colour panel's A and B white-balance slots: a temperature and tint, or empty. */
   wbSlotA: { kelvin: number; tint: number } | null;
   wbSlotB: { kelvin: number; tint: number } | null;
@@ -290,6 +294,8 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   takeHeight: 1080,
   takeFps: 30,
   takeQuality: "standard",
+  takeMode: "standard",
+  timelapseCaptureFps: 2,
   wbSlotA: null,
   wbSlotB: null,
   grade: null,
@@ -347,6 +353,9 @@ export const TAKE_FRAME_RATES = [24, 25, 30, 48, 50, 60, 120, 240] as const;
 const HIGH_SPEED = [120, 240];
 /** Offered when the lens has not said what it can do: what nearly every phone holds. */
 const SAFE_RATES = [24, 25, 30, 60];
+
+/** Timelapse capture rates, frames a second - 1 is a 30x speed-up at 30 fps playback. */
+export const TIMELAPSE_CAPTURE_RATES = [1, 2, 3, 5, 10, 15] as const;
 
 /** Whether a rate can be picked for a take, given the lens's steady rates. */
 export function takeRateOffered(fps: number, lensRates: number[]): boolean {

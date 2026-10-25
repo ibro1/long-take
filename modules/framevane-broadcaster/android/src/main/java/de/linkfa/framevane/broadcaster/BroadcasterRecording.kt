@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Environment
 import com.pedro.library.base.recording.RecordController
+import com.pedro.library.util.AndroidMuxerRecordController
 import com.pedro.library.view.TakePhotoCallback
 import expo.modules.kotlin.Promise
 import java.io.File
@@ -46,6 +47,9 @@ internal fun BroadcasterView.startRecording(): String {
   clearMonitorForAir()
 
   val dir = recordingsDir() ?: throw RecordingUnavailableException()
+  // Off air only: choose the recorder for this take - squeezed for a
+  // timelapse, the library's own otherwise - before anything is encoded.
+  if (!stream.isStreaming) armTimelapse()
   recordingBase = "framevane-${stamp()}"
   recordingSection = 1
   recordingStartedAt = System.currentTimeMillis()
@@ -53,9 +57,10 @@ internal fun BroadcasterView.startRecording(): String {
   recordingPath = file.absolutePath
 
   try {
-    stream.startRecord(recordingPath, listener = recordListener())
+    stream.startRecord(recordingPath, recordTracks(), recordListener())
   } catch (e: Exception) {
     recordingPath = ""
+    disarmTimelapse()
     log(LOG_ERROR, "Recording refused to start: ${e.message}")
     throw RecordingFailedException(e)
   }
@@ -154,7 +159,7 @@ private fun BroadcasterView.rotateRecording() {
   recordingPath = next.absolutePath
 
   val started = runCatching {
-    stream.startRecord(recordingPath, listener = recordListener())
+    stream.startRecord(recordingPath, recordTracks(), recordListener())
     true
   }.getOrElse {
     log(LOG_ERROR, "The next section would not start: ${it.message}")
@@ -204,6 +209,7 @@ internal fun BroadcasterView.stopRecording() {
   }
   // The recorder stops the encoders with it, so they are no longer prepared.
   if (!stream.isStreaming) markUnprepared()
+  disarmTimelapse()
   log(LOG_INFO, "Recording stopped: ${File(path).name}")
   // The background service is held while recording as well as streaming, so
   // a take ending is one of the moments it may no longer be wanted.
@@ -564,3 +570,40 @@ private const val SPLIT_CHECK_MS = 5_000L
  * is a sentence rather than a paragraph.
  */
 private const val RESTART_AFTER_MS = 2_000L
+
+
+/** Whether the take now starting is a timelapse. */
+@Volatile private var timelapseArmed = false
+
+private fun recordTracks(): RecordController.RecordTracks =
+  if (timelapseArmed) RecordController.RecordTracks.VIDEO else RecordController.RecordTracks.ALL
+
+/**
+ * Sets the recorder up for the take about to start: a timelapse if
+ * [TimelapseOptions.captureFps] asks for one, a normal take otherwise. The
+ * controller is swapped before the encoder starts, so it is the one that
+ * receives the video format.
+ */
+private fun BroadcasterView.armTimelapse() {
+  val capture = TimelapseOptions.captureFps
+  val gl = runCatching { stream.getGlInterface() }.getOrNull()
+  if (capture in 1 until videoFps) {
+    val factor = videoFps.toDouble() / capture
+    stream.setRecordController(TimelapseRecordController(AndroidMuxerRecordController(), factor))
+    gl?.forceFpsLimit(capture)
+    timelapseArmed = true
+    log(LOG_INFO, "Timelapse: $capture frames a second, played back at $videoFps (${"%.1f".format(factor)}x)")
+  } else {
+    stream.setRecordController(AndroidMuxerRecordController())
+    gl?.forceFpsLimit(0)
+    timelapseArmed = false
+  }
+}
+
+/** Back to a normal recorder and a full-rate encoder once a timelapse ends. */
+internal fun BroadcasterView.disarmTimelapse(force: Boolean = false) {
+  if (!timelapseArmed && !force) return
+  timelapseArmed = false
+  runCatching { stream.getGlInterface().forceFpsLimit(0) }
+  if (!stream.isRecording) runCatching { stream.setRecordController(AndroidMuxerRecordController()) }
+}

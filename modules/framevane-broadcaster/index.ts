@@ -659,6 +659,20 @@ export function setVideoMuted(muted: boolean): Promise<void> {
   return native.setVideoMuted(muted);
 }
 
+/**
+ * Timelapse for the next off-air take: frames captured per second, or 0 for
+ * a normal take. A build without it records normally.
+ */
+export function setTimelapse(captureFps: number): void {
+  const fn = (nativeModule as Record<string, unknown>).setTimelapse;
+  if (typeof fn !== "function") return;
+  native.setTimelapse(Math.max(0, Math.round(captureFps)));
+}
+
+export function hasTimelapse(): boolean {
+  return typeof (nativeModule as Record<string, unknown>).setTimelapse === "function";
+}
+
 export type ColorGrade = {
   curve?: number;
   black?: number;

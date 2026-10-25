@@ -1212,6 +1212,15 @@ export function useBroadcast() {
       if (!running || !samePicture(running, wanted)) {
         await Broadcaster.configure(wanted).catch(() => {});
       }
+      const prefs = loadPreferences();
+      const capture = prefs.takeMode === "timelapse" ? prefs.timelapseCaptureFps : 0;
+      Broadcaster.setTimelapse(capture);
+      if (capture > 0 && Broadcaster.hasTimelapse()) {
+        notify(`Timelapse: ${Math.round(wanted.fps / capture)}x faster, no sound`);
+      }
+    } else {
+      // A recording under a broadcast is real time.
+      Broadcaster.setTimelapse(0);
     }
 
     try {

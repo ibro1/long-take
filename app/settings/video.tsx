@@ -31,6 +31,7 @@ import {
   TAKE_PICTURES,
   TAKE_QUALITIES,
   takeRateOffered,
+  TIMELAPSE_CAPTURE_RATES,
 } from "@/lib/broadcast/settings";
 import * as Broadcaster from "@/modules/framevane-broadcaster";
 import type { RecordingFile } from "@/modules/framevane-broadcaster";
@@ -205,6 +206,27 @@ export default function VideoSettingsScreen() {
       ) : null}
 
       {tab === "framerate" ? (
+        <>
+          {/* Filmic's Standard / Timelapse switch. */}
+          <View style={tileStyles.modeRow}>
+            {(["standard", "timelapse"] as const).map((mode) => {
+              const on = preferences.takeMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                  onPress={() => updatePreferences({ takeMode: mode })}
+                  style={[tileStyles.mode, on && tileStyles.modeOn]}
+                >
+                  <Text style={[tileStyles.modeText, on && { color: paper.ink, fontWeight: "600" }]}>
+                    {mode === "standard" ? "Standard" : "Timelapse"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
         <Group footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for smooth motion. Greyed rates are ones this phone's camera cannot hold; 120 and 240 need slow-motion capture, which is not in the app yet.">
           <View style={tileStyles.fpsRow}>
             {TAKE_FRAME_RATES.map((fps) => {
@@ -236,6 +258,21 @@ export default function VideoSettingsScreen() {
             })}
           </View>
         </Group>
+          {preferences.takeMode === "timelapse" ? (
+            <Group footer="Frames are captured slowly and played back at the frame rate above, so an hour becomes a minute or two. No sound is recorded. Off air only - a broadcast always runs in real time.">
+              <Stepper
+                options={TIMELAPSE_CAPTURE_RATES.map((fps) => ({
+                  value: String(fps),
+                  label: `${fps} capture fps`,
+                  detail: `Played back at ${preferences.takeFps} fps - ${Math.round(preferences.takeFps / fps)}x faster`,
+                }))}
+                value={String(preferences.timelapseCaptureFps)}
+                onChange={(v) => updatePreferences({ timelapseCaptureFps: Number(v) })}
+                suffix=""
+              />
+            </Group>
+          ) : null}
+        </>
       ) : null}
 
       {tab === "recording" ? (
@@ -409,23 +446,26 @@ function Stepper<T extends string>({
   options,
   value,
   onChange,
+  suffix = " quality",
 }: {
   options: { value: T; label: string; detail: string }[];
   value: T;
   onChange: (v: T) => void;
+  /** Appended to the label; " quality" for the quality picker. */
+  suffix?: string;
 }) {
   const i = Math.max(0, options.findIndex((o) => o.value === value));
   const step = (d: number) => onChange(options[(i + d + options.length) % options.length].value);
   return (
     <View style={tileStyles.stepper}>
-      <Pressable accessibilityRole="button" accessibilityLabel="Lower quality" onPress={() => step(-1)} hitSlop={8} style={tileStyles.arrow}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Previous" onPress={() => step(-1)} hitSlop={8} style={tileStyles.arrow}>
         <ChevronLeft size={28} color={paper.ink} />
       </Pressable>
       <View style={{ flex: 1, alignItems: "center" }}>
-        <Text style={tileStyles.stepValue}>{options[i].label} quality</Text>
+        <Text style={tileStyles.stepValue}>{options[i].label}{suffix}</Text>
         <Text style={tileStyles.stepDetail}>{options[i].detail}</Text>
       </View>
-      <Pressable accessibilityRole="button" accessibilityLabel="Higher quality" onPress={() => step(1)} hitSlop={8} style={tileStyles.arrow}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Next" onPress={() => step(1)} hitSlop={8} style={tileStyles.arrow}>
         <ChevronRight size={28} color={paper.ink} />
       </Pressable>
     </View>
@@ -433,6 +473,10 @@ function Stepper<T extends string>({
 }
 
 const tileStyles = StyleSheet.create({
+  modeRow: { flexDirection: "row", alignSelf: "flex-end", borderRadius: 8, overflow: "hidden", backgroundColor: paper.track },
+  mode: { paddingVertical: 8, paddingHorizontal: 16 },
+  modeOn: { backgroundColor: paper.card },
+  modeText: { color: paper.inkMuted, fontSize: 14 },
   tabs: { flexDirection: "row", borderRadius: 8, overflow: "hidden", backgroundColor: paper.track },
   tab: { flex: 1, paddingVertical: 12, alignItems: "center", borderTopWidth: 3, borderTopColor: "transparent" },
   tabOn: { backgroundColor: paper.card, borderTopColor: paper.accent },
