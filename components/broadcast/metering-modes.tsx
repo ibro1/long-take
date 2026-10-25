@@ -202,8 +202,8 @@ function focusText(t: number): string {
   return r >= 100 ? "1.0" : `.${String(r).padStart(2, "0")}`;
 }
 
-type Axis = "lv" | "iso" | "s" | "z";
-const AXES: { axis: Axis; label: string; a11y: string }[] = [
+export type Axis = "lv" | "iso" | "s" | "z";
+export const AXES: { axis: Axis; label: string; a11y: string }[] = [
   { axis: "lv", label: "LV", a11y: "Light value" },
   { axis: "iso", label: "ISO", a11y: "ISO" },
   { axis: "s", label: "S", a11y: "Shutter" },
@@ -218,9 +218,16 @@ const AXES: { axis: Axis; label: string; a11y: string }[] = [
  * Each ruler reports a position 0..1 and this turns positions into camera
  * values and back, so the rulers stay where the camera actually is.
  */
+/** The axes this lens can drive: exposure needs a manual sensor, Z needs zoom. */
+export function availableAxes(canExpose: boolean, canZoom: boolean): typeof AXES {
+  return AXES.filter(({ axis }) => (axis === "z" ? canZoom : canExpose));
+}
+
 export function ManualControls({
   insets,
-  leadWidth,
+  axis,
+  onAxis,
+  wheelInline,
   fps,
   isoRange,
   exposureTimeRange,
@@ -235,8 +242,14 @@ export function ManualControls({
   onZoom,
 }: {
   readonly insets: { left: number; right: number; top: number; bottom: number };
-  /** Width of the black column on the leading side, where the axis wheel sits. */
-  readonly leadWidth: number;
+  /** Which quantity the leading ruler drives; the wheel that picks it lives with the host. */
+  readonly axis: Axis;
+  readonly onAxis: (axis: Axis) => void;
+  /**
+   * Draw the wheel here, beside the ruler. Portrait only: in landscape the host
+   * puts it in the black column, which is drawn over this layer.
+   */
+  readonly wheelInline: boolean;
   readonly fps: number;
   readonly isoRange: Range | null;
   readonly exposureTimeRange: TimeRange | null;
@@ -258,8 +271,7 @@ export function ManualControls({
   );
   const canExpose = isoList.length > 1 && shutterList.length > 1;
   const canZoom = zoomRange.max > zoomRange.min;
-  const axes = AXES.filter(({ axis }) => (axis === "z" ? canZoom : canExpose));
-  const [axis, setAxis] = useState<Axis>(canExpose ? "lv" : "z");
+  const axes = availableAxes(canExpose, canZoom);
 
   // LV: one light value spread over ISO and shutter, holding the shutter at
   // 180 degrees (1/(2*fps)) for as long as ISO can carry the change.
@@ -335,14 +347,9 @@ export function ManualControls({
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
       {axes.length > 0 ? (
         <>
-          {/* In the black column in landscape; portrait has none, so beside the ruler. */}
-          <AxisWheel
-            axes={axes}
-            axis={axis}
-            onAxis={setAxis}
-            left={leadWidth >= 60 ? 0 : insets.left + RULER_WIDTH + 6}
-            width={leadWidth >= 60 ? leadWidth : 64}
-          />
+          {wheelInline ? (
+            <AxisWheel axes={axes} axis={axis} onAxis={onAxis} left={insets.left + RULER_WIDTH + 6} width={64} />
+          ) : null}
           <View
             pointerEvents="box-none"
             style={[styles.side, { left: insets.left, top: insets.top, bottom: insets.bottom }]}
@@ -371,7 +378,7 @@ const WHEEL_ITEM = 50;
  * mid-height and its neighbours fading above and below it, as Filmic draws
  * its wheel. A tap on a neighbour turns the wheel to it.
  */
-function AxisWheel({
+export function AxisWheel({
   axes,
   axis,
   onAxis,
@@ -415,7 +422,7 @@ function AxisWheel({
 
 /** How often a moving ruler tells the camera: sixteen times a second. */
 const COMMIT_MS = 60;
-const RULER_WIDTH = 40;
+const RULER_WIDTH = 26;
 /** One minor tick per this many points of ruler. */
 const TICK_EVERY = 11;
 /** The ruler's full travel, as a share of the strip's height. */
@@ -478,7 +485,7 @@ function Ruler({
     transform: [{ translateY: span.value * (1 - pos.value) - span.value }],
   }));
   const ticks = rulerLength > 0 ? Math.floor(rulerLength / TICK_EVERY) : 0;
-  const outer = side === "left" ? { left: 4 } : { right: 4 };
+  const outer = side === "left" ? { left: 3 } : { right: 3 };
 
   return (
     <GestureDetector gesture={pan}>
@@ -499,7 +506,7 @@ function Ruler({
             {Array.from({ length: ticks + 1 }, (_, i) => (
               <View
                 key={i}
-                style={[styles.tick, outer, { top: (i / ticks) * rulerLength, width: i % 5 === 0 ? 24 : 11 }]}
+                style={[styles.tick, outer, { top: (i / ticks) * rulerLength, width: i % 5 === 0 ? 16 : 7 }]}
               />
             ))}
           </Animated.View>
@@ -511,7 +518,11 @@ function Ruler({
           style={[styles.indexLabel, side === "left" ? { left: RULER_WIDTH + 34 } : { right: RULER_WIDTH + 34 }]}
         >
           {lines.map((line) => (
-            <Text key={line} style={[styles.indexText, side === "right" && { textAlign: "right" }]}>
+            <Text
+              key={line}
+              numberOfLines={1}
+              style={[styles.indexText, side === "right" && { textAlign: "right" }]}
+            >
               {line}
             </Text>
           ))}
@@ -544,7 +555,7 @@ const styles = StyleSheet.create({
   strip: {
     width: RULER_WIDTH,
     height: "100%",
-    backgroundColor: "rgba(0,0,0,0.18)",
+    backgroundColor: "rgba(0,0,0,0.14)",
   },
   ruler: { position: "absolute", left: 0, right: 0 },
   tick: {
@@ -553,7 +564,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.6)",
   },
   indexLine: { position: "absolute", top: "50%", height: 3, marginTop: -1.5, backgroundColor: filmic.color.accent },
-  indexLabel: { position: "absolute", top: "50%", marginTop: -12 },
+  // A fixed width: shrink-to-fit wrapped "1594" into "159" over "4".
+  indexLabel: { position: "absolute", top: "50%", marginTop: -12, width: 120 },
   indexText: { color: filmic.color.accent, fontSize: 19, fontWeight: "700", lineHeight: 24 },
   wheel: {
     position: "absolute",

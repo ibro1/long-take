@@ -34,6 +34,9 @@ import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { Reticles as ReticlesView } from "@/components/broadcast/reticles";
 import { ZoomRocker } from "@/components/broadcast/zoom-rocker";
 import {
+  availableAxes,
+  type Axis,
+  AxisWheel,
   CenterWeightOverlay,
   ManualControls,
   METERING_ICON,
@@ -902,6 +905,7 @@ export default function BroadcastScreen() {
   // Filmic's reticle modes, behind the ring at the top of the leading column.
   const [meterMode, setMeterMode] = useState<MeteringMode>("reticle");
   const [meterBarOpen, setMeterBarOpen] = useState(false);
+  const [manualAxis, setManualAxis] = useState<Axis>("lv");
   /** Filmic's settings grid, opened over the viewfinder from the gear. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The page the settings panel opens on, or null for the grid. */
@@ -1889,6 +1893,14 @@ export default function BroadcastScreen() {
     if (manualFocus) void resumeAutoFocus();
     if (mode === "center" && exposureLocked) void setExposureLock(false);
   };
+  const manualAxes = availableAxes(
+    !!(capabilities?.manualSensor && capabilities.isoRange && capabilities.exposureTimeRange),
+    zoomRange.max > zoomRange.min,
+  );
+  // A lens that cannot do the chosen axis falls back to the first it can.
+  const manualAxisShown: Axis = manualAxes.some((a) => a.axis === manualAxis)
+    ? manualAxis
+    : (manualAxes[0]?.axis ?? "z");
   const meterRing = (size?: number) => (
     <RingButton
       icon={METERING_ICON[meterMode] as unknown as LucideIcon}
@@ -2043,7 +2055,9 @@ export default function BroadcastScreen() {
       {panel === null && meterMode === "manual" ? (
         <ManualControls
           insets={reticleInsets}
-          leadWidth={wide ? lead : 0}
+          axis={manualAxisShown}
+          onAxis={setManualAxis}
+          wheelInline={!wide}
           fps={connection?.fps ?? 30}
           isoRange={capabilities?.manualSensor ? (capabilities?.isoRange ?? null) : null}
           exposureTimeRange={capabilities?.manualSensor ? (capabilities?.exposureTimeRange ?? null) : null}
@@ -2366,9 +2380,11 @@ export default function BroadcastScreen() {
         <>
           {/* Leading column: framing, the broadcast state where Filmic shows
               PRO, and the colour diamond for the image settings. */}
+          {/* No left inset: Filmic's column hugs the screen edge whatever the
+              cutout does, and an inset pushed the diamond out into the picture. */}
           <SafeAreaView
             pointerEvents="box-none"
-            edges={["top", "left", "bottom"]}
+            edges={["top", "bottom"]}
             className="absolute bottom-0 left-0 top-0 bg-filmic-base"
             onLayout={(e) => setLead(Math.round(e.nativeEvent.layout.width))}
           >
@@ -2381,11 +2397,26 @@ export default function BroadcastScreen() {
                 {meterRing()}
                 <StatusBadge state={badgeState} label={badgeLabel} />
               </View>
-              <ColorDiamond
-                label="Image"
-                active={panel === "image"}
-                onPress={() => togglePanel("image")}
-              />
+              {/* Manual's LV / ISO / S / Z wheel, at mid-height in line with the
+                  ruler's index - here, in the column, because the column is
+                  drawn over the picture layer the rulers live in. */}
+              {meterMode === "manual" && panel === null && manualAxes.length > 0 ? (
+                <AxisWheel
+                  axes={manualAxes}
+                  axis={manualAxisShown}
+                  onAxis={setManualAxis}
+                  left={0}
+                  width={LEFT_COLUMN}
+                />
+              ) : null}
+              {/* Up off the bottom edge, where Filmic keeps it. */}
+              <View style={{ marginBottom: 44 }}>
+                <ColorDiamond
+                  label="Image"
+                  active={panel === "image"}
+                  onPress={() => togglePanel("image")}
+                />
+              </View>
             </View>
           </SafeAreaView>
 
