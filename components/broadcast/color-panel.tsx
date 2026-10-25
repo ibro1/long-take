@@ -109,13 +109,21 @@ export function ColorPanel({
         key={slot}
         accessibilityRole="button"
         accessibilityLabel={`Slot ${slot.toUpperCase()}`}
-        accessibilityHint={saved ? "Tap to apply; hold to save the current balance here" : "Hold to save the current balance here"}
-        onPress={() => saved && manualWhiteBalance && onKelvin(saved.kelvin, saved.tint)}
+        accessibilityHint={saved ? "Tap to apply; hold to save the current balance over it" : "Tap to save the current balance here"}
+        // Empty: a tap stores what is on the pad. Filled: a tap recalls it,
+        // and holding stores over it - so neither slot ever looks dead.
+        onPress={() =>
+          saved
+            ? onKelvin(saved.kelvin, saved.tint)
+            : onSaveSlot(slot, { kelvin: readout.kelvin, tint: readout.tint })
+        }
         onLongPress={() => onSaveSlot(slot, { kelvin: readout.kelvin, tint: readout.tint })}
         className="active:opacity-60"
         style={[styles.preset, saved && kelvin === saved.kelvin && tint === saved.tint && styles.presetOn]}
       >
-        <Text style={[styles.slotText, !saved && { color: paper.inkMuted }]}>{slot.toUpperCase()}</Text>
+        <Text style={styles.slotText}>{slot.toUpperCase()}</Text>
+        {/* What the slot holds, so a filled one reads differently from an empty one. */}
+        <Text style={styles.slotValue}>{saved ? `${saved.kelvin}K` : "save"}</Text>
       </Pressable>
     );
   };
@@ -352,7 +360,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   presetOn: { backgroundColor: "#FFFFFF", borderWidth: 2, borderColor: filmic.color.accent },
-  slotText: { color: paper.ink, fontSize: 24, fontWeight: "200" },
+  slotText: { color: paper.ink, fontSize: 22, fontWeight: "300", lineHeight: 26 },
+  slotValue: { color: paper.inkMuted, fontSize: 9, letterSpacing: 0.3 },
   awb: { flex: 1.1, height: 46, alignItems: "center", justifyContent: "center" },
   awbOn: { borderTopWidth: 2, borderBottomWidth: 2, borderColor: filmic.color.accent },
   awbText: { color: paper.ink, fontSize: 18, fontWeight: "500" },

@@ -2402,6 +2402,15 @@ export default function BroadcastScreen() {
           panels are, rather than a sheet across the whole frame. */}
       {/* Filmic's colour panel: light, beside the leading column, a rail of
           tabs down its left edge. White balance is the tab there is today. */}
+      {/* Outside the colour panel closes it, as Filmic's does: the first tap
+          anywhere else - a button included - only closes the panel. */}
+      {panel === "image" ? (
+        <Pressable
+          accessibilityLabel="Close the colour panel"
+          onPress={closePanel}
+          style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 19 }}
+        />
+      ) : null}
       {panel === "image" ? (
         <View
           style={[
