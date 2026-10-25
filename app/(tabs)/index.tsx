@@ -274,14 +274,17 @@ const FILL = { flex: 1 } as const;
  * with their labels under them - and every pixel past what the controls need is
  * picture taken away from the shot.
  */
-const COLUMN = 120;
+// 88 since 25 Oct 2026: Filmic's trailing strip is about a tenth of the
+// screen, and this one now holds a single stack - mic, meter, shutter - so
+// the width it had for two discs side by side went to the picture.
+const COLUMN = 88;
 
 /**
  * Landscape's leading column, Filmic's black strip with the framing ring, the
  * state badge and the colour diamond. It sits in the letterbox a 16:9 picture
  * leaves on a 20:9 phone, so it costs the shot almost nothing.
  */
-const LEFT_COLUMN = 84;
+const LEFT_COLUMN = 78;
 
 
 export default function BroadcastScreen() {
@@ -2558,7 +2561,9 @@ export default function BroadcastScreen() {
                 <Meter muted={muted} maxFps={ladder.levelMeterFps} />
               </View>
 
-              <ShutterButton label={primary.label} mode={primary.mode} onPress={primary.onPress} />
+              {/* Compact, as Filmic's: the shutter is the size of a thumb, not a
+                  plate, and the strip it sits in stays narrow. */}
+              <ShutterButton compact label={primary.label} mode={primary.mode} onPress={primary.onPress} />
             </View>
           </SafeAreaView>
 
