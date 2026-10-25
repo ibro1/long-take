@@ -33,6 +33,7 @@ import {
 import { MoreSheet, type MoreItem } from "@/components/broadcast/more-sheet";
 import { Reticles as ReticlesView } from "@/components/broadcast/reticles";
 import { ZoomRocker } from "@/components/broadcast/zoom-rocker";
+import { GainHandle } from "@/components/broadcast/gain-handle";
 import {
   availableAxes,
   type Axis,
@@ -133,6 +134,7 @@ import {
   setMonitor,
   setMonitorOptions,
   setScreenBrightness,
+  setMicGain,
   setPauseSlate,
   setThermalBitrateCap,
 } from "@/modules/framevane-broadcaster";
@@ -2834,10 +2836,20 @@ const Reticles = memo(ReticlesView);
  * drew it. An older build falls back to the JS meter. Same 16 x 129 footprint.
  */
 function Meter({ muted, maxFps }: { muted: boolean; maxFps: number }) {
+  const [gain, setGain] = useState(() => loadSettings().micGain);
+  const onGain = useCallback((next: number) => {
+    setGain(next);
+    saveSettings({ micGain: next });
+    void setMicGain(next).catch(() => {});
+  }, []);
   if (LevelMeterView) {
     return (
       <View className="items-center gap-1.5">
-        <LevelMeterView muted={muted} maxFps={maxFps} style={{ width: 16, height: 129 }} />
+        <View style={{ width: 16, height: 129 }}>
+          <LevelMeterView muted={muted} maxFps={maxFps} style={{ width: 16, height: 129 }} />
+          {/* Filmic's gain bar across the meter: drag for input gain. */}
+          <GainHandle gain={gain} height={129} width={16} onGain={onGain} />
+        </View>
         {muted ? (
           <Text className="text-[10px] font-semibold uppercase text-filmic-alert">Muted</Text>
         ) : null}
