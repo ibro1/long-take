@@ -122,6 +122,11 @@ export type CameraCapabilities = {
    * capability). Offer `setManualExposure` only when true.
    */
   manualSensor: boolean;
+  /**
+   * Frame rates the lens can hold steadily (its fixed AE target ranges),
+   * ascending; empty where it does not say or on a build older than this.
+   */
+  frameRates: number[];
   /** SENSOR_INFO_SENSITIVITY_RANGE, or null where the lens does not say. */
   isoRange: { min: number; max: number } | null;
   /**

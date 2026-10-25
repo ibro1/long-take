@@ -329,14 +329,30 @@ export function defaultPicture(preferences: Preferences = loadPreferences()): {
 
 /** Take sizes, 16:9. 4K is offered; a lens that cannot do it falls back with a notice. */
 export const TAKE_PICTURES = [
+  { label: "360p", width: 640, height: 360 },
+  { label: "480p SD", width: 854, height: 480 },
   { label: "720p HD", width: 1280, height: 720 },
   { label: "1080p Full HD", width: 1920, height: 1080 },
   { label: "1440p QHD", width: 2560, height: 1440 },
   { label: "4K UHD 2160p", width: 3840, height: 2160 },
 ] as const;
 
-/** Filmic's standard rates. 48 and 50 are left out: few Android sensors deliver them. */
-export const TAKE_FRAME_RATES = [24, 25, 30, 60] as const;
+/**
+ * Filmic's row of rates. Which of them a phone can record is the lens's to
+ * say (capabilities().frameRates); 120 and 240 need Android's high-speed
+ * capture, which the recorder does not use yet, so they are shown and never
+ * offered - as Filmic greys out what a phone cannot do.
+ */
+export const TAKE_FRAME_RATES = [24, 25, 30, 48, 50, 60, 120, 240] as const;
+const HIGH_SPEED = [120, 240];
+/** Offered when the lens has not said what it can do: what nearly every phone holds. */
+const SAFE_RATES = [24, 25, 30, 60];
+
+/** Whether a rate can be picked for a take, given the lens's steady rates. */
+export function takeRateOffered(fps: number, lensRates: number[]): boolean {
+  if (HIGH_SPEED.includes(fps)) return false;
+  return lensRates.length > 0 ? lensRates.includes(fps) : SAFE_RATES.includes(fps);
+}
 
 export const TAKE_QUALITIES: { value: TakeQuality; label: string; detail: string }[] = [
   { value: "economy", label: "Economy", detail: "Smaller files, fine for talking heads" },
@@ -346,6 +362,8 @@ export const TAKE_QUALITIES: { value: TakeQuality; label: string; detail: string
 
 /** Bits per second at 30 fps, per height and quality. */
 const TAKE_BITRATES: Record<number, Record<TakeQuality, number>> = {
+  360: { economy: 1_000_000, standard: 1_500_000, high: 2_500_000 },
+  480: { economy: 2_000_000, standard: 3_000_000, high: 5_000_000 },
   720: { economy: 5_000_000, standard: 8_000_000, high: 12_000_000 },
   1080: { economy: 10_000_000, standard: 16_000_000, high: 24_000_000 },
   1440: { economy: 16_000_000, standard: 24_000_000, high: 36_000_000 },
@@ -363,7 +381,10 @@ export function takePicture(preferences: Preferences = loadPreferences()): {
   videoBitrate: number;
 } {
   const picture = TAKE_PICTURES.find((p) => p.height === preferences.takeHeight) ?? TAKE_PICTURES[1];
-  const fps = (TAKE_FRAME_RATES as readonly number[]).includes(preferences.takeFps) ? preferences.takeFps : 30;
+  const fps =
+    (TAKE_FRAME_RATES as readonly number[]).includes(preferences.takeFps) && !HIGH_SPEED.includes(preferences.takeFps)
+      ? preferences.takeFps
+      : 30;
   const quality = TAKE_BITRATES[picture.height][preferences.takeQuality] ?? TAKE_BITRATES[picture.height].standard;
   return { width: picture.width, height: picture.height, fps, videoBitrate: Math.round(quality * (fps > 30 ? 1.5 : 1)) };
 }

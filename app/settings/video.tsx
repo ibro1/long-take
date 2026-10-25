@@ -30,6 +30,7 @@ import {
   TAKE_FRAME_RATES,
   TAKE_PICTURES,
   TAKE_QUALITIES,
+  takeRateOffered,
 } from "@/lib/broadcast/settings";
 import * as Broadcaster from "@/modules/framevane-broadcaster";
 import type { RecordingFile } from "@/modules/framevane-broadcaster";
@@ -50,6 +51,15 @@ import type { RecordingFile } from "@/modules/framevane-broadcaster";
 export default function VideoSettingsScreen() {
   const nav = useSettingsNav();
   const [tab, setTab] = useState<"encoding" | "framerate" | "recording">("encoding");
+  // The steady rates of the lens now open; empty off the viewfinder or on an
+  // older build, when the usual four are offered.
+  const [lensRates] = useState<number[]>(() => {
+    try {
+      return Broadcaster.capabilities().frameRates ?? [];
+    } catch {
+      return [];
+    }
+  });
   const [settings, setSettings] = useState<PhoneEncoderSettings>(() => loadSettings());
   const [preferences, setPreferences] = useState<Preferences>(() => loadPreferences());
   const [codecs, setCodecs] = useState(() => codecSupport());
@@ -120,7 +130,19 @@ export default function VideoSettingsScreen() {
             <Tile
               key={p.height}
               label={p.height === 2160 ? "4K" : `${p.height}p`}
-              detail={p.height === 2160 ? "UHD" : p.height === 1440 ? "QHD" : p.height === 1080 ? "Full HD" : "HD"}
+              detail={
+                p.height === 2160
+                  ? "UHD"
+                  : p.height === 1440
+                    ? "QHD"
+                    : p.height === 1080
+                      ? "Full HD"
+                      : p.height === 720
+                        ? "HD"
+                        : p.height === 480
+                          ? "SD"
+                          : "Low"
+              }
               on={preferences.takeHeight === p.height}
               onPress={() => updatePreferences({ takeHeight: p.height })}
             />
@@ -183,21 +205,32 @@ export default function VideoSettingsScreen() {
       ) : null}
 
       {tab === "framerate" ? (
-        <Group footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for smooth motion. A rate this camera cannot record falls back to 30.">
+        <Group footer="24 for a film look, 25 or 30 to match the mains where you are, 60 for smooth motion. Greyed rates are ones this phone's camera cannot hold; 120 and 240 need slow-motion capture, which is not in the app yet.">
           <View style={tileStyles.fpsRow}>
             {TAKE_FRAME_RATES.map((fps) => {
               const on = preferences.takeFps === fps;
+              // Greyed where this phone cannot hold the rate, as Filmic does.
+              const offered = takeRateOffered(fps, lensRates);
               return (
                 <Pressable
                   key={fps}
                   accessibilityRole="button"
-                  accessibilityLabel={`${fps} frames per second`}
-                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`${fps} frames per second${offered ? "" : ", not available on this phone"}`}
+                  accessibilityState={{ selected: on, disabled: !offered }}
+                  disabled={!offered}
                   onPress={() => updatePreferences({ takeFps: fps })}
                   className="active:opacity-60"
                   style={[tileStyles.fps, on && tileStyles.fpsOn]}
                 >
-                  <Text style={[tileStyles.fpsText, on && { color: paper.ink }]}>{fps}</Text>
+                  <Text
+                    style={[
+                      tileStyles.fpsText,
+                      on && { color: paper.ink },
+                      !offered && { color: paper.track },
+                    ]}
+                  >
+                    {fps}
+                  </Text>
                 </Pressable>
               );
             })}
@@ -404,19 +437,19 @@ const tileStyles = StyleSheet.create({
   tab: { flex: 1, paddingVertical: 12, alignItems: "center", borderTopWidth: 3, borderTopColor: "transparent" },
   tabOn: { backgroundColor: paper.card, borderTopColor: paper.accent },
   tabText: { color: paper.inkMuted, fontSize: 15 },
-  row: { flexDirection: "row", gap: 8, padding: 12 },
+  row: { flexDirection: "row", gap: 6, padding: 12 },
   tile: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: "center", backgroundColor: paper.page },
   tileOn: { backgroundColor: paper.accent },
-  tileLabel: { color: paper.ink, fontSize: 18, fontWeight: "600" },
+  tileLabel: { color: paper.ink, fontSize: 16, fontWeight: "600" },
   tileDetail: { color: paper.inkMuted, fontSize: 11 },
   stepper: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingBottom: 12 },
   arrow: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   stepValue: { color: paper.ink, fontSize: 17, fontWeight: "600" },
   stepDetail: { color: paper.inkMuted, fontSize: 12 },
-  fpsRow: { flexDirection: "row", justifyContent: "space-around", paddingVertical: 14 },
-  fps: { width: 58, height: 58, borderRadius: 29, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "transparent" },
+  fpsRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 14, paddingHorizontal: 8 },
+  fps: { width: 48, height: 48, borderRadius: 29, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "transparent" },
   fpsOn: { borderColor: paper.ink },
-  fpsText: { color: paper.inkMuted, fontSize: 22 },
+  fpsText: { color: paper.inkMuted, fontSize: 19 },
 });
 
 function recordingsSummary(recordings: RecordingFile[]): string {

@@ -124,6 +124,17 @@ internal fun BroadcasterView.capabilities(): Map<String, Any?> {
       mapOf("minNs" to it.first.toDouble(), "maxNs" to it.second.toDouble())
     },
     "manualWhiteBalance" to manualWhiteBalanceSupported(characteristics),
+    /**
+     * The frame rates this lens can hold steadily: the tops of its AE target
+     * ranges that are fixed (24-24, 30-30, 60-60). A range like 15-30 is the
+     * camera free to drop frames in the dark, which is no promise of 30 at
+     * all, so only the fixed ones count. Ascending.
+     */
+    "frameRates" to (characteristics?.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+      ?.filter { it.lower == it.upper }
+      ?.map { it.upper }
+      ?.distinct()
+      ?.sorted() ?: emptyList<Int>()),
     "available" to true,
   )
 }
@@ -285,6 +296,7 @@ internal fun unavailableCapabilities(): Map<String, Any?> = mapOf(
   "isoRange" to null,
   "exposureTimeRange" to null,
   "manualWhiteBalance" to false,
+  "frameRates" to emptyList<Int>(),
   "available" to false,
 )
 

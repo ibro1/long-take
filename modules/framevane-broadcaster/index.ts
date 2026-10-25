@@ -316,6 +316,7 @@ export function capabilities(): CameraCapabilities {
     isoRange: null,
     exposureTimeRange: null,
     manualWhiteBalance: false,
+    frameRates: [],
     ...native.capabilities(),
   };
 }
