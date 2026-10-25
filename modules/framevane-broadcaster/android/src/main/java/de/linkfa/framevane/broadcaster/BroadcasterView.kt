@@ -1853,6 +1853,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     val gl = runCatching { stream.getGlInterface() }.getOrNull() ?: return false
     return runCatching {
       hideSlate()
+      val portrait = preparedRotation == 90 || preparedRotation == 270
       val w = if (portrait) videoHeight else videoWidth
       val h = if (portrait) videoWidth else videoHeight
       val filter = ImageObjectFilterRender()
