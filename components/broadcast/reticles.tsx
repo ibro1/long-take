@@ -218,6 +218,8 @@ export function Reticles({
   canExpose,
   insets,
   exposureLocked,
+  focusLocked: focusLockedProp,
+  onFocusLock,
   onFocus,
   onExposurePoint,
   onExposureLock,
@@ -234,6 +236,13 @@ export function Reticles({
   /** Exposure point, normalised 0..1 of the FULL frame. Called once after first layout with the default position, throttled (80ms) while dragging, and on release. */
   readonly onExposurePoint: (x: number, y: number) => void;
   readonly onExposureLock: (on: boolean) => void;
+  /**
+   * Focus held from outside - a focus set on Manual's ruler comes back here as
+   * a locked puck. Given with onFocusLock, the host owns the lock; left out,
+   * the puck keeps its own.
+   */
+  readonly focusLocked?: boolean;
+  readonly onFocusLock?: (on: boolean) => void;
 }) {
   // React only needs to know whether there is anything to draw on yet; the
   // size itself lives in shared values, which is where the worklets read it.
@@ -298,7 +307,14 @@ export function Reticles({
   // beyond the hold that placing the point already applies, so the lock simply
   // freezes the puck and signals "held". Both locks change rarely, so they stay
   // React state (they recolour the drawing) and are mirrored for the worklets.
-  const [focusLocked, setFocusLocked] = useState(false);
+  const [ownFocusLocked, setOwnFocusLocked] = useState(false);
+  const focusLocked = focusLockedProp ?? ownFocusLocked;
+  const onFocusLockRef = useRef(onFocusLock);
+  onFocusLockRef.current = onFocusLock;
+  const setFocusLocked = useCallback((next: boolean) => {
+    if (onFocusLockRef.current) onFocusLockRef.current(next);
+    else setOwnFocusLocked(next);
+  }, []);
   const focusLockedRef = useRef(focusLocked);
   focusLockedRef.current = focusLocked;
   const focusLockedSV = useSharedValue(false);
@@ -327,7 +343,7 @@ export function Reticles({
   // JS-side landing points for the worklets.
   const emitFocus = useCallback((x: number, y: number) => onFocusRef.current(x, y), []);
   const emitExposurePoint = useCallback((x: number, y: number) => onExposurePointRef.current(x, y), []);
-  const toggleFocusLock = useCallback(() => setFocusLocked((v) => !v), []);
+  const toggleFocusLock = useCallback(() => setFocusLocked(!focusLockedRef.current), [setFocusLocked]);
   const toggleExposureLock = useCallback(() => onExposureLockRef.current(!exposureLockedRef.current), []);
   // A joined pair locks as one. They can differ - a free puck may be dropped onto
   // a locked one - so rather than flip each (which would keep them out of step),
@@ -336,8 +352,10 @@ export function Reticles({
     const next = !(focusLockedRef.current || exposureLockedRef.current);
     setFocusLocked(next);
     if (exposureLockedRef.current !== next) onExposureLockRef.current(next);
-  }, []);
-  const unlockFocus = useCallback(() => setFocusLocked(false), []);
+  }, [setFocusLocked]);
+  const unlockFocus = useCallback(() => {
+    if (focusLockedRef.current) setFocusLocked(false);
+  }, [setFocusLocked]);
   const unlockExposure = useCallback(() => {
     if (exposureLockedRef.current) onExposureLockRef.current(false);
   }, []);

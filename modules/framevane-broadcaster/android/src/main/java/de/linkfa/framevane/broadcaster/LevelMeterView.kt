@@ -382,7 +382,8 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     drawnChannels = channels
     val column = columnHeight()
     for (c in 0 until channels) {
-      val lit = (level[c] * SEGMENTS).roundToInt()
+      // In pixels: the column is one solid bar now, so it moves a pixel at a time.
+      val lit = (level[c] * column).roundToInt()
       val held = heldLevel(c, now)
       // Compared in pixels, so a hold that has sunk less than one pixel since
       // the last frame does not cost a redraw.
@@ -452,28 +453,28 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     val cap = capHeight()
     val columnTop = cap + gap
     val column = columnHeight()
-    val segment = ((column - gap * (SEGMENTS - 1)) / SEGMENTS).coerceAtLeast(1f)
-    // Also capped by the column's width: half a stereo meter can be narrower
-    // than the 4dp a full corner needs.
-    val radius = min(min(radiusPx, segment / 2f), (x1 - x0) / 2f)
-    val lit = drawnLit[c].coerceAtLeast(0)
+    // Square-ended, like Filmic's: a solid bar reads as a level, not a count.
+    val radius = min(radiusPx, (x1 - x0) / 2f) * 0.25f
+    val litPx = drawnLit[c].coerceAtLeast(0).toFloat().coerceAtMost(column)
 
     // The clip cap, dark until a buffer reaches full scale.
     rect.set(x0, 0f, x1, cap)
     canvas.drawRoundRect(rect, radius, radius, if (drawnClip[c]) litHot else unlit)
 
-    // Drawn bottom up: segment 1 is the floor, segment 12 the top.
-    for (n in 1..SEGMENTS) {
-      val bottom = columnTop + column - (n - 1) * (segment + gap)
-      rect.set(x0, bottom - segment, x1, bottom)
-      val paint = when {
-        n > lit -> unlit
-        // The JavaScript meter's rule: a segment whose top sits above HOT of
-        // the column is red when lit.
-        n.toFloat() / SEGMENTS > HOT -> litHot
-        else -> litGood
+    // One solid column: the unlit track, then the level filled from the
+    // bottom - green, and red for whatever of it is above HOT.
+    val floor = columnTop + column
+    rect.set(x0, columnTop, x1, floor)
+    canvas.drawRoundRect(rect, radius, radius, unlit)
+    if (litPx > 0f) {
+      val hotLine = floor - column * HOT
+      val top = floor - litPx
+      rect.set(x0, maxOf(top, hotLine), x1, floor)
+      canvas.drawRect(rect, litGood)
+      if (top < hotLine) {
+        rect.set(x0, top, x1, hotLine)
+        canvas.drawRect(rect, litHot)
       }
-      canvas.drawRoundRect(rect, radius, radius, paint)
     }
 
     // The hold mark, a 2dp bar across the column at the held height, in the

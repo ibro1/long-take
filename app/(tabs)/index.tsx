@@ -919,6 +919,9 @@ export default function BroadcastScreen() {
   const [meterMode, setMeterMode] = useState<MeteringMode>("reticle");
   const [meterBarOpen, setMeterBarOpen] = useState(false);
   const [manualAxis, setManualAxis] = useState<Axis>("lv");
+  // Focus held on the reticle - by a tap on the puck, or carried back from
+  // Manual's ruler. Owned here so Manual can hand it over.
+  const [focusHeld, setFocusHeld] = useState(false);
   /** Filmic's settings grid, opened over the viewfinder from the gear. */
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** The page the settings panel opens on, or null for the grid. */
@@ -1882,6 +1885,7 @@ export default function BroadcastScreen() {
       return;
     }
     exposurePoint.current = null;
+    setFocusHeld(false);
     if (exposureMode === "manual") void setExposureMode("auto");
     if (manualFocus) void resumeAutoFocus();
     if (mode === "center" && exposureLocked) void setExposureLock(false);
@@ -1894,6 +1898,31 @@ export default function BroadcastScreen() {
   const manualAxisShown: Axis = manualAxes.some((a) => a.axis === manualAxis)
     ? manualAxis
     : (manualAxes[0]?.axis ?? "z");
+  /**
+   * Done on Manual, as Filmic does it: a tap on the picture closes the rulers
+   * and brings the reticles back, locked on what was set - the ISO and shutter
+   * and the focus distance stay exactly as they are. Tapping a locked puck
+   * then hands that one back to the camera.
+   */
+  const finishManual = () => {
+    setMeterBarOpen(false);
+    setMeterMode("reticle");
+    if (manualFocus) setFocusHeld(true);
+  };
+  /** Unlocking the exposure puck ends a manual exposure as well as a lock. */
+  const onReticleExposureLock = (on: boolean) => {
+    if (!on && exposureMode === "manual") {
+      void setExposureMode("auto");
+      if (exposureLocked) void setExposureLock(false);
+      return;
+    }
+    void setExposureLock(on);
+  };
+  /** And the focus puck: unlocked, a held distance goes back to auto focus. */
+  const onReticleFocusLock = (on: boolean) => {
+    setFocusHeld(on);
+    if (!on && manualFocus) void resumeAutoFocus();
+  };
   const meterRing = (size?: number) => (
     <RingButton
       icon={METERING_ICON[meterMode] as unknown as LucideIcon}
@@ -2051,6 +2080,7 @@ export default function BroadcastScreen() {
           axis={manualAxisShown}
           onAxis={setManualAxis}
           wheelInline={!wide}
+          onDone={finishManual}
           fps={connection?.fps ?? 30}
           isoRange={capabilities?.manualSensor ? (capabilities?.isoRange ?? null) : null}
           exposureTimeRange={capabilities?.manualSensor ? (capabilities?.exposureTimeRange ?? null) : null}
@@ -2069,12 +2099,14 @@ export default function BroadcastScreen() {
         <View pointerEvents="box-none" className="absolute inset-0">
           <Reticles
             canFocus={capabilities?.available ?? false}
-            canExpose={canExpose && exposureMode === "auto"}
+            canExpose={canExpose}
             insets={reticleInsets}
-            exposureLocked={exposureLocked}
+            exposureLocked={exposureLocked || exposureMode === "manual"}
+            focusLocked={focusHeld || manualFocus}
+            onFocusLock={onReticleFocusLock}
             onFocus={focusAt}
             onExposurePoint={onExposurePoint}
-            onExposureLock={setExposureLock}
+            onExposureLock={onReticleExposureLock}
           />
         </View>
       ) : null}

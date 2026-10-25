@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { type LayoutChangeEvent, Pressable, StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { type SharedValue, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, {
+  type SharedValue,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withDecay,
+  withTiming,
+} from "react-native-reanimated";
 import Svg, { Path, Rect } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
 
@@ -225,6 +232,7 @@ export function availableAxes(canExpose: boolean, canZoom: boolean): typeof AXES
 
 export function ManualControls({
   insets,
+  onDone,
   axis,
   onAxis,
   wheelInline,
@@ -250,6 +258,8 @@ export function ManualControls({
    * puts it in the black column, which is drawn over this layer.
    */
   readonly wheelInline: boolean;
+  /** A tap on the picture: done setting, hand back to the reticles. */
+  readonly onDone: () => void;
   readonly fps: number;
   readonly isoRange: Range | null;
   readonly exposureTimeRange: TimeRange | null;
@@ -345,6 +355,9 @@ export function ManualControls({
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+      {/* Anywhere on the picture but the rulers: finished, as Filmic does it -
+          the rulers close and the reticles come back holding these values. */}
+      <Pressable accessibilityLabel="Done" onPress={onDone} style={StyleSheet.absoluteFill} />
       {axes.length > 0 ? (
         <>
           {wheelInline ? (
@@ -409,16 +422,18 @@ export function AxisWheel({
   };
 
   const pan = Gesture.Pan()
-    .activeOffsetY([-6, 6])
+    .activeOffsetY([-4, 4])
     .onBegin(() => {
       start.value = offset.value;
     })
     .onUpdate((e) => {
       offset.value = Math.min(max + WHEEL_ITEM * 0.4, Math.max(-WHEEL_ITEM * 0.4, start.value - e.translationY));
     })
-    .onEnd(() => {
-      const i = Math.round(Math.min(max, Math.max(0, offset.value)) / WHEEL_ITEM);
-      offset.value = withTiming(i * WHEEL_ITEM, { duration: 140 });
+    .onEnd((e) => {
+      // A flick carries on, as a picker wheel does, then lands on a label.
+      const projected = offset.value - e.velocityY * 0.18;
+      const i = Math.round(Math.min(max, Math.max(0, projected)) / WHEEL_ITEM);
+      offset.value = withTiming(i * WHEEL_ITEM, { duration: 220 });
       scheduleOnRN(pick, i);
     });
   const tap = Gesture.Tap().onEnd((e) => {
@@ -473,7 +488,7 @@ function WheelLabel({
 
 /** How often a moving ruler tells the camera: sixteen times a second. */
 const COMMIT_MS = 60;
-const RULER_WIDTH = 26;
+const RULER_WIDTH = 34;
 /** One minor tick per this many points of ruler. */
 const TICK_EVERY = 11;
 /** The ruler's full travel, as a share of the strip's height. */
@@ -509,24 +524,49 @@ function Ruler({
     if (!dragging.value) pos.value = value;
   }, [value, pos, dragging]);
 
+  // Commits while the ruler coasts after a flick, at the same rate as a drag.
+  useAnimatedReaction(
+    () => pos.value,
+    (v, prev) => {
+      if (!dragging.value || prev === null || v === prev) return;
+      const now = Date.now();
+      if (now - lastCommit.value >= COMMIT_MS) {
+        lastCommit.value = now;
+        scheduleOnRN(onChange, v);
+      }
+    },
+  );
+
+  // Drag follows the finger; let go mid-swipe and it coasts to a stop, as
+  // every scroller does. Caught again by a touch. The strip takes touches a
+  // finger's width either side of what is drawn, so it is easy to land on.
   const pan = Gesture.Pan()
-    .minDistance(2)
+    .minDistance(1)
+    .hitSlop({ horizontal: 22 })
     .onBegin(() => {
       dragging.value = true;
       start.value = pos.value;
+      pos.value = pos.value; // cancels any coasting
     })
     .onUpdate((e) => {
       if (span.value <= 0) return;
       pos.value = Math.min(1, Math.max(0, start.value - e.translationY / span.value));
-      const now = Date.now();
-      if (now - lastCommit.value >= COMMIT_MS) {
-        lastCommit.value = now;
+    })
+    .onEnd((e) => {
+      if (span.value <= 0) return;
+      pos.value = withDecay(
+        { velocity: -e.velocityY / span.value, clamp: [0, 1], deceleration: 0.994 },
+        (finished) => {
+          dragging.value = false;
+          if (finished) scheduleOnRN(onChange, pos.value);
+        },
+      );
+    })
+    .onFinalize((_e, success) => {
+      if (!success) {
+        dragging.value = false;
         scheduleOnRN(onChange, pos.value);
       }
-    })
-    .onFinalize(() => {
-      dragging.value = false;
-      scheduleOnRN(onChange, pos.value);
     });
 
   const rulerLength = h * RULER_SPAN;
@@ -557,7 +597,7 @@ function Ruler({
             {Array.from({ length: ticks + 1 }, (_, i) => (
               <View
                 key={i}
-                style={[styles.tick, outer, { top: (i / ticks) * rulerLength, width: i % 5 === 0 ? 16 : 7 }]}
+                style={[styles.tick, outer, { top: (i / ticks) * rulerLength, width: i % 5 === 0 ? 20 : 9 }]}
               />
             ))}
           </Animated.View>
