@@ -550,7 +550,7 @@ class LevelMeterView(context: Context, appContext: AppContext) : ExpoView(contex
     const val SEGMENTS = 12
 
     /** How wide one channel's bar is drawn, in dp. */
-    const val BAR_WIDTH_DP = 7f
+    const val BAR_WIDTH_DP = 5f
 
     /** As in level-meter.tsx: above this the microphone is close to clipping. */
     const val HOT = 0.82f

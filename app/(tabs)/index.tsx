@@ -2891,7 +2891,7 @@ function Meter({ muted, maxFps }: { muted: boolean; maxFps: number }) {
   // Filmic's proportions: tall, and wide enough that the two bars sit apart.
   const { width: screenW, height: screenH } = useWindowDimensions();
   const meterH = screenW > screenH ? Math.round(Math.min(300, screenH * 0.5)) : 170;
-  const meterW = 34;
+  const meterW = 30;
   const [gain, setGain] = useState(() => loadSettings().micGain);
   const onGain = useCallback((next: number) => {
     setGain(next);
