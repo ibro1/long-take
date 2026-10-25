@@ -18,7 +18,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BufferMeter } from "@/components/broadcast/buffer-meter";
-import type { LucideIcon } from "lucide-react-native";
+import { Thermometer, type LucideIcon } from "lucide-react-native";
 
 import { useImmersiveScreen } from "@/lib/immersive";
 import {
@@ -58,7 +58,7 @@ import { ladderEffects, useThermalLadder } from "@/lib/broadcast/thermal-ladder"
 import { useIdleDim } from "@/lib/broadcast/idle-dim";
 import { DrainEstimator } from "@/lib/broadcast/battery-estimate";
 import { listPresets, type Preset, savePreset, subscribePresets } from "@/lib/broadcast/presets";
-import { ImagePanel } from "@/components/broadcast/image-panel";
+import { ColorPanel } from "@/components/broadcast/color-panel";
 import { routeForTile, SettingsGrid } from "@/components/settings/settings-grid";
 import { ChoiceRow, Group, Page, SwitchRow } from "@/components/settings/chrome";
 import { useReadout } from "@/lib/broadcast/readouts";
@@ -144,6 +144,15 @@ import {
  */
 const PANEL_BAND_TOP = 88;
 const PANEL_BAND_BOTTOM = 72;
+
+const COLOR_PANEL = {
+  position: "absolute",
+  flexDirection: "row",
+  backgroundColor: "#EEEEEE",
+  borderRadius: 4,
+  overflow: "hidden",
+  zIndex: 20,
+} as const;
 
 /** Named apart from the Panel component: one is a box, this is which box. */
 /**
@@ -644,6 +653,10 @@ export default function BroadcastScreen() {
    * one thing that is off does not.
    */
   const [usualMic, setUsualMic] = useState(() => loadPreferences().usualMic);
+  const [wbSlots, setWbSlots] = useState(() => {
+    const p = loadPreferences();
+    return { a: p.wbSlotA, b: p.wbSlotB };
+  });
   const [recordOnStart, setRecordOnStart] = useState(
     () => loadPreferences().recordWhileStreaming,
   );
@@ -1429,28 +1442,8 @@ export default function BroadcastScreen() {
   };
 
   const panelBody =
-    panel === null ? null : panel === "image" ? (
-      <ImagePanel
-        onClose={closePanel}
-        whiteBalanceModes={whiteBalanceModes}
-        whiteBalance={kelvin !== null ? -1 : whiteBalance}
-        describeWhiteBalance={describeWhiteBalance}
-        onWhiteBalance={setWhiteBalance}
-        manualWhiteBalance={capabilities?.manualWhiteBalance ?? false}
-        kelvin={kelvin}
-        tint={tint}
-        onKelvin={setWhiteBalanceKelvin}
-        manualSensor={capabilities?.manualSensor ?? false}
-        exposureMode={exposureMode}
-        onExposureMode={setExposureMode}
-        isoRange={capabilities?.isoRange ?? null}
-        exposureTimeRange={capabilities?.exposureTimeRange ?? null}
-        iso={manualIso}
-        exposureNs={manualExposureNs}
-        onManualExposure={setManualExposure}
-        fps={connection?.fps ?? 30}
-      />
-    ) : panel === "presets" ? (
+    // The colour panel is hosted on its own, beside the leading column.
+    panel === null || panel === "image" ? null : panel === "presets" ? (
       <Panel title="Presets" onClose={closePanel}>
         {presets.length === 0 ? (
           <Text className="text-sm text-filmic-inkmuted">
@@ -2346,6 +2339,46 @@ export default function BroadcastScreen() {
           corner discs, and between the top discs - so nothing on the glass is
           drawn over it or under it. Centred and capped in width, as Filmic's
           panels are, rather than a sheet across the whole frame. */}
+      {/* Filmic's colour panel: light, beside the leading column, a rail of
+          tabs down its left edge. White balance is the tab there is today. */}
+      {panel === "image" ? (
+        <View
+          style={[
+            COLOR_PANEL,
+            wide
+              ? { left: lead + 6, top: 54, bottom: 26, width: Math.min(600, width - lead - trail - 120) }
+              : { left: 12, right: 12, top: topBar + 12, height: 360 },
+          ]}
+        >
+          <View style={{ width: 62, backgroundColor: "#D6D6D8" }}>
+            <View
+              accessibilityRole="tab"
+              accessibilityState={{ selected: true }}
+              accessibilityLabel="White balance"
+              style={{ height: 72, alignItems: "center", justifyContent: "center", backgroundColor: "#EEEEEE" }}
+            >
+              <Thermometer size={28} color="#1C1C1E" strokeWidth={1.5} />
+            </View>
+          </View>
+          <ColorPanel
+            manualWhiteBalance={capabilities?.manualWhiteBalance ?? false}
+            whiteBalanceModes={whiteBalanceModes}
+            whiteBalance={kelvin !== null ? -1 : whiteBalance}
+            onWhiteBalance={setWhiteBalance}
+            kelvin={kelvin}
+            tint={tint}
+            sensorKelvin={5500}
+            onKelvin={setWhiteBalanceKelvin}
+            slots={wbSlots}
+            onSaveSlot={(slot, value) => {
+              const saved = savePreferences(slot === "a" ? { wbSlotA: value } : { wbSlotB: value });
+              setWbSlots({ a: saved.wbSlotA, b: saved.wbSlotB });
+              notify(`Saved to ${slot.toUpperCase()}`);
+            }}
+          />
+        </View>
+      ) : null}
+
       {wide && panelBody ? (
         <View
           pointerEvents="box-none"

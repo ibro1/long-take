@@ -1615,7 +1615,11 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     val wanted = when (mode) {
       "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
       "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-      else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+      // Follow the phone's own motion, as Filmic does, even with the system's
+      // auto-rotate off: UNSPECIFIED obeyed that switch, so a phone with
+      // rotation locked never turned the viewfinder. Orientation lock is
+      // the app's own control for holding it.
+      else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
     }
     runCatching { activity.requestedOrientation = wanted }
       .onFailure { log(LOG_WARN, "The screen would not hold that orientation: ${it.message}") }
@@ -2613,6 +2617,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    // The screen follows the stored choice from the first frame, not only
+    // after it is changed - "auto" has to ask for the sensor to mean it.
+    lockScreen(orientation)
     /**
      * The navigator detaches this view when the operator opens another tab and
      * attaches it again when they come back, and the module reaches the

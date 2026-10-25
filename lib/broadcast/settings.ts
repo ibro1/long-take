@@ -219,6 +219,9 @@ export type Preferences = {
   takeHeight: number;
   takeFps: number;
   takeQuality: TakeQuality;
+  /** The colour panel's A and B white-balance slots: a temperature and tint, or empty. */
+  wbSlotA: { kelvin: number; tint: number } | null;
+  wbSlotB: { kelvin: number; tint: number } | null;
 };
 
 export type TakeQuality = "economy" | "standard" | "high";
@@ -285,6 +288,8 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   takeHeight: 1080,
   takeFps: 30,
   takeQuality: "standard",
+  wbSlotA: null,
+  wbSlotB: null,
 };
 
 /**
