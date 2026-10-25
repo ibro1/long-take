@@ -421,19 +421,24 @@ export function AxisWheel({
     if (next) onAxis(next.axis);
   };
 
+  // One swipe, one step - fast or slow, as a picker detent. The labels follow
+  // the finger up to one place either way, then land.
+  const startIndex = useSharedValue(index);
   const pan = Gesture.Pan()
     .activeOffsetY([-4, 4])
     .onBegin(() => {
       start.value = offset.value;
+      startIndex.value = Math.round(offset.value / WHEEL_ITEM);
     })
     .onUpdate((e) => {
-      offset.value = Math.min(max + WHEEL_ITEM * 0.4, Math.max(-WHEEL_ITEM * 0.4, start.value - e.translationY));
+      const from = startIndex.value * WHEEL_ITEM;
+      offset.value = Math.min(from + WHEEL_ITEM, Math.max(from - WHEEL_ITEM, start.value - e.translationY));
     })
     .onEnd((e) => {
-      // A flick carries on, as a picker wheel does, then lands on a label.
-      const projected = offset.value - e.velocityY * 0.18;
-      const i = Math.round(Math.min(max, Math.max(0, projected)) / WHEEL_ITEM);
-      offset.value = withTiming(i * WHEEL_ITEM, { duration: 220 });
+      const swiped = Math.abs(e.translationY) > 10 || Math.abs(e.velocityY) > 250;
+      const up = (Math.abs(e.translationY) > 10 ? e.translationY : e.velocityY) < 0;
+      const i = Math.min(axes.length - 1, Math.max(0, startIndex.value + (swiped ? (up ? 1 : -1) : 0)));
+      offset.value = withTiming(i * WHEEL_ITEM, { duration: 160 });
       scheduleOnRN(pick, i);
     });
   const tap = Gesture.Tap().onEnd((e) => {
