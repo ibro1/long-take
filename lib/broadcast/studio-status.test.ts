@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isSettled, platformChips, studioStatusFrom } from "./studio-status.ts";
+import { activeWatchUrl, isSettled, platformChips, studioStatusFrom } from "./studio-status.ts";
 
 /**
  * What the chip beside the uptime says, from what `/api/control/status`
@@ -22,11 +22,48 @@ test("only an answer that parses is believed", () => {
     open: false,
     waiting: false,
     platforms: [],
+    lastBroadcast: null,
   });
   assert.deepEqual(
-    studioStatusFrom({ open: true, waiting: true, platforms: [{ platform: "youtube" }, { platform: "youtube", status: "live" }] }),
-    { open: true, waiting: true, platforms: [{ platform: "youtube", status: "live" }] },
+    studioStatusFrom({
+      open: true,
+      waiting: true,
+      platforms: [
+        { platform: "youtube" },
+        { platform: "youtube", status: "live", watchUrl: "https://youtu.be/123" },
+      ],
+    }),
+    {
+      open: true,
+      waiting: true,
+      platforms: [{ platform: "youtube", status: "live", watchUrl: "https://youtu.be/123" }],
+      lastBroadcast: null,
+    },
   );
+});
+
+test("activeWatchUrl returns live watch URL then falls back to lastBroadcast", () => {
+  assert.equal(activeWatchUrl(null), null);
+  assert.equal(activeWatchUrl({ open: false, waiting: false, platforms: [] }), null);
+
+  const liveStatus = {
+    open: true,
+    waiting: false,
+    platforms: [{ platform: "youtube", status: "live", watchUrl: "https://youtube.com/live/abc" }],
+  };
+  assert.equal(activeWatchUrl(liveStatus), "https://youtube.com/live/abc");
+
+  const endedStatus = {
+    open: false,
+    waiting: false,
+    platforms: [],
+    lastBroadcast: {
+      startedAt: "2026-11-03T07:00:00Z",
+      endedAt: "2026-11-03T07:45:00Z",
+      platforms: [{ platform: "youtube", status: "complete", watchUrl: "https://youtube.com/watch?v=abc" }],
+    },
+  };
+  assert.equal(activeWatchUrl(endedStatus), "https://youtube.com/watch?v=abc");
 });
 
 test("YouTube short of live is starting at first, and amber once the phone has been up a while", () => {

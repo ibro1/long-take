@@ -2,7 +2,7 @@ import { useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import { useFocusEffect } from "@react-navigation/native";
 import { useKeepAwake } from "expo-keep-awake";
 import { type Href, useRouter } from "expo-router";
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Alert,
   BackHandler,
@@ -10,6 +10,7 @@ import {
   PermissionsAndroid,
   Platform,
   Pressable,
+  Share,
   TextInput,
   useWindowDimensions,
   Vibration,
@@ -18,7 +19,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { BufferMeter } from "@/components/broadcast/buffer-meter";
-import { Blend, ChartSpline, Thermometer, type LucideIcon } from "lucide-react-native";
+import { Blend, ChartSpline, Share2, Thermometer, type LucideIcon } from "lucide-react-native";
 
 import { useImmersiveScreen } from "@/lib/immersive";
 import {
@@ -121,7 +122,12 @@ import { Text } from "@/components/ui/text";
 import { activeConnection, type Connection, saveConnection } from "@/lib/broadcast/connections";
 import { pushLog } from "@/lib/broadcast/log";
 import { endBroadcast } from "@/lib/broadcast/overlays";
-import { isSettled } from "@/lib/broadcast/studio-status";
+import {
+  activeWatchUrl,
+  isSettled,
+  studioStatusSnapshot,
+  subscribeStudioStatus,
+} from "@/lib/broadcast/studio-status";
 import { useHealthHeartbeat } from "@/lib/broadcast/useHealthHeartbeat";
 import { useStudioStatus } from "@/lib/broadcast/useStudioStatus";
 import { mark, tick } from "@/lib/haptics";
@@ -425,6 +431,13 @@ export default function BroadcastScreen() {
    */
   useStudioStatus({ connection, live });
 
+  const studioStatus = useSyncExternalStore(
+    subscribeStudioStatus,
+    studioStatusSnapshot,
+    studioStatusSnapshot,
+  );
+  const currentWatchUrl = activeWatchUrl(studioStatus);
+
   /**
    * The language of the words on the glass, re-read on focus because it is
    * chosen on the Settings tab. Held in state only so that a change re-renders
@@ -576,20 +589,43 @@ export default function BroadcastScreen() {
                * minutes of an empty live event.
                */
               let last = "";
+              let endedOk = false;
               for (const wait of [0, 2000, 5000]) {
                 if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
                 const ended = await endBroadcast(connection);
                 if (ended.ok) {
                   pushLog({ at: Date.now(), level: "info", message: "The studio ended the broadcast." });
-                  return;
+                  endedOk = true;
+                  break;
                 }
                 last = ended.message;
               }
-              pushLog({
-                at: Date.now(),
-                level: "warn",
-                message: `The studio could not be told the broadcast ended (${last}). It closes on its own within five minutes.`,
-              });
+              if (!endedOk) {
+                pushLog({
+                  at: Date.now(),
+                  level: "warn",
+                  message: `The studio could not be told the broadcast ended (${last}). It closes on its own within five minutes.`,
+                });
+              }
+              if (currentWatchUrl) {
+                Alert.alert(
+                  "Broadcast Ended",
+                  "Share the recording link with your audience or groups?",
+                  [
+                    { text: "Dismiss", style: "cancel" },
+                    {
+                      text: "Share Link",
+                      onPress: () => {
+                        void Share.share({
+                          title: "Live Stream Recording",
+                          message: currentWatchUrl,
+                          url: currentWatchUrl,
+                        });
+                      },
+                    },
+                  ],
+                );
+              }
             })();
           },
         },
@@ -1362,6 +1398,23 @@ export default function BroadcastScreen() {
       hint: connection?.name ?? t("control.nowhere"),
       onPress: () => router.push("/(tabs)/connections"),
     },
+    ...(connection
+      ? [
+          {
+            icon: Share2,
+            label: currentWatchUrl ? "Share Stream Link" : "Share Stream Target",
+            hint: currentWatchUrl ?? connection.name ?? connection.server,
+            onPress: () => {
+              const toShare = currentWatchUrl ?? connection.server;
+              void Share.share({
+                title: "Live Stream",
+                message: toShare,
+                url: toShare,
+              });
+            },
+          },
+        ]
+      : []),
     ...QUICK_CONTROLS.filter((id) => !glass.includes(id) || id === "flip").map((id) => ({
       icon: CONTROL[id].icon,
       label: CONTROL[id].label,

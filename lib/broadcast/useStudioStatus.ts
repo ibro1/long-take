@@ -42,7 +42,7 @@ export function useStudioStatus({ connection, live }: { connection: Connection |
   const connectionId = connection?.id ?? null;
 
   useEffect(() => {
-    if (!live || !paired || !connectionId) {
+    if (!paired || !connectionId) {
       publishStudioStatus(null);
       return;
     }
@@ -60,13 +60,21 @@ export function useStudioStatus({ connection, live }: { connection: Connection |
       }
     };
 
-    const first = setTimeout(() => void ask(), FIRST_AFTER_MS);
-    const timer = setInterval(() => void ask(), EVERY_MS);
+    if (live) {
+      const first = setTimeout(() => void ask(), FIRST_AFTER_MS);
+      const timer = setInterval(() => void ask(), EVERY_MS);
+      return () => {
+        stopped = true;
+        clearTimeout(first);
+        clearInterval(timer);
+      };
+    }
+
+    // Off air: ask once so lastBroadcast / watchUrl is known for sharing,
+    // and when open is false StudioChip renders nothing.
+    void ask();
     return () => {
       stopped = true;
-      clearTimeout(first);
-      clearInterval(timer);
-      publishStudioStatus(null);
     };
   }, [live, paired, connectionId]);
 }

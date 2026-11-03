@@ -274,6 +274,22 @@ export async function setAnnounce(
 }
 
 /**
+ * Forces the WhatsApp announcement to be sent immediately from the studio,
+ * bypassing the 6-hour repeat lockout window.
+ */
+export async function sendAnnounceNow(
+  connection: Connection,
+): Promise<ControlResult<{ sentTo: string[] }>> {
+  const result = await request(connection, "POST", "/api/control/announce", { action: "send" });
+  if (!result.ok) return result;
+  const val = result.value as { ok?: boolean; sentTo?: string[]; error?: string } | null;
+  if (!val?.ok) {
+    return { ok: false, message: val?.error ?? "Failed to send announcement." };
+  }
+  return { ok: true, value: { sentTo: Array.isArray(val.sentTo) ? val.sentTo.map(String) : [] } };
+}
+
+/**
  * Tells the studio the operator ended the lesson, rather than the phone having
  * dropped.
  *

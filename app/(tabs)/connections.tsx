@@ -12,8 +12,9 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
-  View,
+  Share,
   StyleSheet,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -23,6 +24,8 @@ import {
   getAnnounce,
   getDestinations,
   getSourceSettings,
+  getStudioStatus,
+  sendAnnounceNow,
   setDestinationEnabled,
   setDestinationOrientation,
   setSourceSettings,
@@ -37,6 +40,7 @@ import {
   type Visibility,
   type WhoCanWatch,
 } from "@/lib/broadcast/overlays";
+import { activeWatchUrl, type StudioStatus } from "@/lib/broadcast/studio-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BackIcon } from "@/components/broadcast/icons";
@@ -48,7 +52,7 @@ import {
   ReadoutRow,
   SettingsPanelContext,
 } from "@/components/settings/chrome";
-import { Check } from "lucide-react-native";
+import { Check, Share2 } from "lucide-react-native";
 import { Text } from "@/components/ui/text";
 import {
   type AccountLink,
@@ -1029,6 +1033,37 @@ function Editor({
 
   const [announce, setAnnounceState] = useState<Announce | null>(null);
   const [announceNote, setAnnounceNote] = useState<string | null>(null);
+  const [studioStatus, setStudioStatus] = useState<StudioStatus | null>(null);
+  const [sendingAnnounce, setSendingAnnounce] = useState(false);
+
+  useEffect(() => {
+    if (!paired) return;
+    let cancelled = false;
+    void getStudioStatus(connection).then((result) => {
+      if (cancelled) return;
+      if (result.ok) setStudioStatus(result.value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [paired, connection.id]);
+
+  const triggerAnnounceNow = async () => {
+    if (sendingAnnounce) return;
+    setSendingAnnounce(true);
+    setAnnounceNote(null);
+    const result = await sendAnnounceNow(connection);
+    setSendingAnnounce(false);
+    if (result.ok) {
+      const list =
+        result.value.sentTo.length > 0 ? result.value.sentTo.join(", ") : "selected groups";
+      setAnnounceNote(`Announcement sent to ${list}.`);
+    } else {
+      setAnnounceNote(result.message);
+    }
+  };
+
+  const watchUrl = activeWatchUrl(studioStatus);
 
   useEffect(() => {
     if (!paired) return;
@@ -1299,6 +1334,38 @@ function Editor({
         </Field>
       ) : null}
 
+      {/* Viewer watch URL for public stream sharing */}
+      {watchUrl ? (
+        <Field label="Viewer Watch Link">
+          <View className="gap-2 rounded-xl border border-border bg-muted/40 p-3">
+            <Text className="text-xs font-mono text-foreground" numberOfLines={2} selectable>
+              {watchUrl}
+            </Text>
+            <View className="flex-row gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onPress={() => {
+                  void Share.share({
+                    title: "Live Stream",
+                    message: watchUrl,
+                    url: watchUrl,
+                  });
+                }}
+              >
+                <View className="flex-row items-center gap-1.5">
+                  <Share2 className="h-3.5 w-3.5 text-foreground" />
+                  <Text className="text-xs font-semibold">Share Link</Text>
+                </View>
+              </Button>
+            </View>
+            <Text className="text-xs text-muted-foreground">
+              Public link for viewers (YouTube / Facebook Live). Tap to share or copy to clipboard.
+            </Text>
+          </View>
+        </Field>
+      ) : null}
+
       {/* Announcing the session. Only for a paired destination, and only when
           the studio has somewhere to send it - a switch that cannot do anything
           is worse than no switch. */}
@@ -1415,6 +1482,21 @@ function Editor({
                   </Text>
                 </>
               ) : null}
+              <View className="pt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={sendingAnnounce || announce.announceChats.length === 0}
+                  onPress={() => void triggerAnnounceNow()}
+                >
+                  <Text className="text-xs font-semibold">
+                    {sendingAnnounce ? "Sending Announcement..." : "Send Announcement Now"}
+                  </Text>
+                </Button>
+                <Text className="pt-1 text-xs text-muted-foreground">
+                  Send the WhatsApp announcement immediately, bypassing the repeat lockout window.
+                </Text>
+              </View>
             </>
           ) : null}
           {announceNote ? <Note>{announceNote}</Note> : null}

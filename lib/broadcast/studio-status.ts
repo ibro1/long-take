@@ -15,7 +15,11 @@
  * Pure apart from the store, so the judgement is tested without a phone.
  */
 
-export type PlatformStatus = { platform: string; status: string };
+export type PlatformStatus = {
+  platform: string;
+  status: string;
+  watchUrl?: string | null;
+};
 
 export type StudioStatus = {
   /** A run is open in the studio for this stream. */
@@ -23,22 +27,66 @@ export type StudioStatus = {
   /** The studio is holding the run open for a phone that went quiet. */
   waiting: boolean;
   platforms: PlatformStatus[];
+  /** Latest completed broadcast info, if any. */
+  lastBroadcast?: {
+    startedAt: string | Date;
+    endedAt: string | Date | null;
+    platforms: PlatformStatus[];
+  } | null;
 };
 
 /** Trusted only as far as it parses; an entry missing either field is dropped. */
 export function studioStatusFrom(value: unknown): StudioStatus | null {
   if (!value || typeof value !== "object") return null;
-  const raw = value as { open?: unknown; waiting?: unknown; platforms?: unknown };
+  const raw = value as {
+    open?: unknown;
+    waiting?: unknown;
+    platforms?: unknown;
+    lastBroadcast?: unknown;
+  };
   if (typeof raw.open !== "boolean") return null;
-  const platforms = Array.isArray(raw.platforms)
-    ? raw.platforms.flatMap((entry) => {
-        const row = entry as Partial<PlatformStatus> | null;
-        return row && typeof row.platform === "string" && typeof row.status === "string"
-          ? [{ platform: row.platform, status: row.status }]
-          : [];
-      })
-    : [];
-  return { open: raw.open, waiting: raw.waiting === true, platforms };
+
+  const parsePlatforms = (input: unknown): PlatformStatus[] =>
+    Array.isArray(input)
+      ? input.flatMap((entry) => {
+          const row = entry as Partial<PlatformStatus> | null;
+          return row && typeof row.platform === "string" && typeof row.status === "string"
+            ? [
+                {
+                  platform: row.platform,
+                  status: row.status,
+                  watchUrl: typeof row.watchUrl === "string" ? row.watchUrl : null,
+                },
+              ]
+            : [];
+        })
+      : [];
+
+  const platforms = parsePlatforms(raw.platforms);
+
+  let lastBroadcast: StudioStatus["lastBroadcast"] = null;
+  if (raw.lastBroadcast && typeof raw.lastBroadcast === "object") {
+    const lb = raw.lastBroadcast as Record<string, unknown>;
+    lastBroadcast = {
+      startedAt: (lb.startedAt as string | Date) ?? "",
+      endedAt: (lb.endedAt as string | Date | null) ?? null,
+      platforms: parsePlatforms(lb.platforms),
+    };
+  }
+
+  return { open: raw.open, waiting: raw.waiting === true, platforms, lastBroadcast };
+}
+
+/**
+ * Returns the best public viewer URL (e.g. YouTube Live link) available from
+ * the studio status, checking the active live platforms first and falling back
+ * to the most recent broadcast.
+ */
+export function activeWatchUrl(status: StudioStatus | null): string | null {
+  if (!status) return null;
+  const liveUrl = status.platforms.find((p) => p.watchUrl)?.watchUrl;
+  if (liveUrl) return liveUrl;
+  return status.lastBroadcast?.platforms.find((p) => p.watchUrl)?.watchUrl ?? null;
 }
 
 export type ChipWord = "live" | "waiting" | "starting" | "ended" | "unpublished";
