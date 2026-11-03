@@ -122,6 +122,14 @@ export default function AudioSettingsScreen() {
           ]}
           onChange={selectDevice}
         />
+        <SwitchRow
+          label="Take an external microphone"
+          detail="Switches to a lapel, USB receiver or Bluetooth microphone as soon as it appears, whenever no input is pinned above. A microphone you pick by hand is never overridden."
+          on={preferences.autoExternalMic}
+          onPress={() =>
+            setPreferences(savePreferences({ autoExternalMic: !preferences.autoExternalMic }))
+          }
+        />
       </Group>
 
       <Group

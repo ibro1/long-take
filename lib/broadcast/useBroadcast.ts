@@ -25,7 +25,7 @@ import type {
 } from "@/modules/framevane-broadcaster";
 import { type Connection, endpointFor, srtOptionsFor } from "./connections";
 import { canStartRecording, tooLittleRoom } from "./guards";
-import { offerableInputs, stillOfferable } from "./inputs";
+import { autoPickInput, offerableInputs, stillOfferable } from "./inputs";
 import { pushLog, readLog, subscribeLog } from "./log";
 import { noteRecordEvent } from "./recordings";
 import { publishLevel, takePainted, takeRenders } from "./level-store";
@@ -456,7 +456,25 @@ export function useBroadcast() {
     const wanted = preferences.audioDeviceId;
     const keep = stillOfferable(inputs, wanted);
     if (!keep) savePreferences({ audioDeviceId: -1 });
-    Broadcaster.selectAudioDevice(keep ? wanted : -1).catch(() => {});
+    /**
+     * Nothing pinned, or the pinned one is gone: take the microphone that is
+     * actually attached.
+     *
+     * A lapel or a transmitter switched on before the app opens is the common
+     * case, and Android does not prefer it - the recorder keeps the handset's
+     * own microphone and the accessory sits there unused.
+     *
+     * A stored choice is still king: `keep` is only true for a microphone that
+     * is present and offerable, so one picked by hand is re-applied, the
+     * built-in one included. What this picks is deliberately *not* stored,
+     * because a stored id is a pin - and an automatic decision that becomes a
+     * pin is one the operator never made and cannot see.
+     */
+    const auto =
+      (wanted < 0 || !keep) && preferences.autoExternalMic
+        ? autoPickInput(inputs, preferences.usualMic)
+        : null;
+    Broadcaster.selectAudioDevice(auto ? auto.id : keep ? wanted : -1).catch(() => {});
     // Read at the moment a take finishes rather than when one starts, so it
     // has to be on the view before any recording ends - which means now.
     Broadcaster.setSaveToGallery(preferences.saveToGallery).catch(() => {});
@@ -974,6 +992,14 @@ export function useBroadcast() {
    */
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const chosenInput = useRef<AudioDevice | null>(null);
+  /**
+   * The inputs that were there at the last report.
+   *
+   * Held so that "something arrived" can be told from "something was always
+   * there". Null until the first report, because the cold start has already
+   * made this decision and repeating it here would only undo it.
+   */
+  const seenInputs = useRef<Set<number> | null>(null);
 
   /**
    * And again once the preview is actually up.
@@ -1011,8 +1037,40 @@ export function useBroadcast() {
         notify(`${lost} is gone. The phone's own microphone is live.`, "bad");
       }
 
+      /**
+       * An accessory arriving is the moment to take it.
+       *
+       * The operator who plugs a lapel in seconds before a lesson expects the
+       * app to start using it; leaving that to a tap on a chip is how the
+       * lesson goes out on the wrong microphone. What is *not* news is a device
+       * that was already in the previous report and is still there - otherwise
+       * every report would re-select, and re-selecting a microphone that is
+       * already selected stops and restarts it.
+       *
+       * A microphone pinned by hand is left alone; this only ever fires for one
+       * the app has not seen before, which is a pin nobody could have made yet.
+       */
+      const previous = seenInputs.current;
+      seenInputs.current = new Set(devices.map((device) => device.id));
+      let arrived: AudioDevice | null = null;
+      if (previous) {
+        const fresh = devices.some(
+          (device) =>
+            !previous.has(device.id) && device.kind !== "builtin" && device.kind !== "other",
+        );
+        const { autoExternalMic, usualMic } = loadPreferences();
+        arrived = fresh && autoExternalMic ? autoPickInput(devices, usualMic) : null;
+        if (arrived) {
+          // Applied, not stored: the operator asked for the accessory to be
+          // taken, not for it to become a pin that outlives the accessory.
+          Broadcaster.selectAudioDevice(arrived.id).catch(() => {});
+          notify(`${arrived.name || "External microphone"} is now the input.`);
+        }
+      }
+
       const current = devices.find((device) => device.current) ?? null;
-      chosenInput.current = current && current.kind !== "builtin" ? current : null;
+      chosenInput.current =
+        arrived ?? (current && current.kind !== "builtin" ? current : null);
     },
     [notify],
   );

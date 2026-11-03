@@ -140,6 +140,21 @@ export type Preferences = {
   /** An Android audio device id, or -1 to leave the choice to Android. */
   audioDeviceId: number;
   /**
+   * Take an external microphone when one is attached and nothing is pinned.
+   *
+   * Bluetooth is opt-in in Android: the phone will not route an active recorder
+   * to a transmitter unless the app asks, so a mic switched on in a pocket is
+   * ignored and the lesson goes out on the handset's own microphone. This makes
+   * the app ask.
+   *
+   * It only fills a gap. A microphone the operator picked by hand is never
+   * overridden - not on the next report, not on the next cold start - because a
+   * control that undoes itself teaches an operator to stop trusting it. What
+   * does re-arm it is an accessory arriving that the app has not seen before,
+   * which is the moment somebody plugs a lapel in and expects it to take.
+   */
+  autoExternalMic: boolean;
+  /**
    * The microphone the operator normally teaches with, by what it is rather
    * than by Android's number for it.
    *
@@ -264,6 +279,8 @@ export const PREFERENCE_DEFAULTS: Preferences = {
   recordHeight: 0,
   recordingFolder: "",
   audioDeviceId: -1,
+  // On: the microphone in the operator's pocket is the one they meant to use.
+  autoExternalMic: true,
   usualMic: null,
   orientation: "auto",
   /**
