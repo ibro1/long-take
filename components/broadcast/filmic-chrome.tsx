@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react-native";
-import { Pressable, StyleSheet, View } from "react-native";
+import { useEffect, useRef } from "react";
+import { Animated, Pressable, StyleSheet, View } from "react-native";
 import Svg, { Defs, Line, LinearGradient, Rect, Stop } from "react-native-svg";
 
 import { Text } from "@/components/ui/text";
@@ -333,15 +334,27 @@ export function InfoPanel({
       <Divider />
 
       <View style={styles.center}>
-        {/* Thin tabular digits: the clock is the biggest thing in the panel
-            and must not jitter sideways as it ticks. */}
-        <Text
-          maxFontSizeMultiplier={HUD_TEXT}
-          numberOfLines={1}
-          style={[styles.timecode, { color: hot ? filmic.color.alert : filmic.color.ink }]}
-        >
-          {timecode}
-        </Text>
+        {/**
+         * The clock is white whether it is running or not, and the red moved
+         * off it and onto the dot.
+         *
+         * It used to turn #FF3B30 the moment the broadcast or the take started,
+         * which is the one moment it has to be read from across a room. Red is
+         * the lowest-luminance colour on the panel, this face is the thinnest
+         * on the glass, and the two together left the operator squinting at the
+         * number they check while looking at the room - a state worth a dot,
+         * not worth the number.
+         */}
+        <View style={styles.clockRow}>
+          {hot ? <HotDot /> : null}
+          <Text
+            maxFontSizeMultiplier={HUD_TEXT}
+            numberOfLines={1}
+            style={[styles.timecode, { color: filmic.color.ink }]}
+          >
+            {timecode}
+          </Text>
+        </View>
         {subline ? (
           <Text maxFontSizeMultiplier={HUD_TEXT} numberOfLines={1} style={[styles.subline, { color: filmic.color.inkMuted }]}>
             {subline}
@@ -360,6 +373,42 @@ export function InfoPanel({
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * "This is running" as a dot rather than as the colour of the number.
+ *
+ * Same sentence the record badge speaks, in the one place the operator is
+ * already reading - and it breathes, because a red dot that never moves is
+ * indistinguishable from a piece of the design. Red is left to carry exactly
+ * this: it is a poor colour for text and a good one for a signal.
+ */
+function HotDot() {
+  const pulse = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.25, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 600, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  // Inline style: nativewind does not reach inside an Animated.View.
+  return (
+    <Animated.View
+      style={{
+        opacity: pulse,
+        width: 7,
+        height: 7,
+        borderRadius: 4,
+        backgroundColor: filmic.color.alert,
+      }}
+    />
+  );
+}
 
 const styles = StyleSheet.create({
   center: { alignItems: "center", justifyContent: "center" },
@@ -393,12 +442,22 @@ const styles = StyleSheet.create({
   fpsUnit: { fontSize: 7, lineHeight: 9, fontWeight: "700", marginLeft: 2, marginTop: 1 },
   resolution: { fontSize: 11, lineHeight: 13, fontWeight: "500" },
   timecode: {
-    fontSize: 22,
-    lineHeight: 26,
-    fontWeight: "200",
-    letterSpacing: 1,
+    /**
+     * Bigger and heavier than Filmic's hairline face, deliberately.
+     *
+     * A phone on a tripod two metres away is the real viewing distance, and an
+     * ultra-light 22px clock was being read by walking up to it. Weight carries
+     * further than size does, so it is mostly weight: 200 to 600, and 22 to 28
+     * to match the panel it sits in. Tabular figures keep it from jittering
+     * sideways as it ticks.
+     */
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: "600",
+    letterSpacing: 0.5,
     fontVariant: ["tabular-nums"],
   },
+  clockRow: { flexDirection: "row", alignItems: "center", gap: 5 },
   subline: { fontSize: 9, lineHeight: 11 },
   divider: { width: 1, height: 26, backgroundColor: DIVIDER },
   batteryBody: {
