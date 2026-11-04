@@ -70,7 +70,7 @@ import { useReadout } from "@/lib/broadcast/readouts";
 import { MonitoringSelector } from "@/components/broadcast/monitoring-selector";
 import { topBanner } from "@/lib/broadcast/banners";
 import { plainFailure } from "@/lib/broadcast/failure";
-import { guardFor, preflightGuards } from "@/lib/broadcast/guards";
+import { canStartRecording, guardFor, preflightGuards, tooLittleRoom } from "@/lib/broadcast/guards";
 import { formatKbps } from "@/lib/broadcast/units";
 import { offerableInputs } from "@/lib/broadcast/inputs";
 import { levelSnapshot, noteRender, subscribeLevel } from "@/lib/broadcast/level-store";
@@ -1195,6 +1195,19 @@ export default function BroadcastScreen() {
   const togglePanel = (id: Exclude<PanelId, null>) => setPanel(panel === id ? null : id);
 
   /**
+   * Whether a take could start at all, from the last storage reading.
+   *
+   * The refusal used to exist only as a sentence said once, at the moment of
+   * the tap: the operator pressed Record, a line appeared over the picture for
+   * five seconds, and the button went on looking exactly as it had. Tap it
+   * again after that and nothing said why. A control that declines has to keep
+   * saying so - the reason is a state of the phone, not an event - so the
+   * control renames itself while the phone is short of room, and its line gives
+   * the numbers.
+   */
+  const noRoom = usableBytes > 0 && !canStartRecording(usableBytes);
+
+  /**
    * Off air with nowhere to send it, the primary button goes and fetches the
    * missing piece rather than sitting there greyed out. A disabled button is a
    * dead end, and "no destination" is a question with one obvious answer.
@@ -1217,8 +1230,17 @@ export default function BroadcastScreen() {
           },
         }
       : {
-          mode: "record" as const,
-          label: t("control.record"),
+          /**
+           * Grey and named, rather than a red disc that answers nothing.
+           *
+           * The primary control is the whole screen's promise when there is no
+           * destination: press this and it records. With less than the two
+           * gigabytes a take needs, that promise is false, so the disc stops
+           * offering it and says what is missing instead. Still pressable - the
+           * tap is what re-reads the disk and reads the numbers back.
+           */
+          mode: noRoom ? ("blocked" as const) : ("record" as const),
+          label: noRoom ? t("control.noRoom") : t("control.record"),
           icon: RecordIcon,
           onPress: () => {
             tick();
@@ -1335,8 +1357,20 @@ export default function BroadcastScreen() {
       // says "Record" while a recording is running reads as the way to start
       // one, and the way to stop is then nowhere on the screen.
       icon: recording ? StopIcon : RecordIcon,
-      label: recording ? t("control.stopRecording") : t("control.record"),
-      hint: recording ? t("control.stopRecordingHint") : t("control.recordHint"),
+      // And named for why it will not, while the phone has no room for a take.
+      // The button stays pressable: a tap still reads the disk afresh and says
+      // the numbers out loud, which is the only way the figure in the sentence
+      // is ever current.
+      label: recording
+        ? t("control.stopRecording")
+        : noRoom
+          ? t("control.noRoom")
+          : t("control.record"),
+      hint: recording
+        ? t("control.stopRecordingHint")
+        : noRoom
+          ? tooLittleRoom(usableBytes)
+          : t("control.recordHint"),
       on: recording,
       tone: "alert",
       labelCarriesState: true,

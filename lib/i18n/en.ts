@@ -57,6 +57,8 @@ export const en = {
   "control.logHint": "What the encoder said, in order.",
   "control.record": "Record",
   "control.recordHint": "A copy on this handset, as well as whatever the server keeps.",
+  "control.noRoom": "No room",
+  "control.noRoomHint": "Free up some space and this starts working again.",
   "control.stopRecording": "Stop recording",
   "control.stopRecordingHint": "Ends the take and saves the file to the phone.",
   "control.photo": "Photo",

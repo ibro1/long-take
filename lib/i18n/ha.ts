@@ -56,6 +56,8 @@ export const ha: Record<StringKey, string> = {
   "control.logHint": "Abin da mai sarrafa bidiyo ya faɗa, bi da bi.",
   "control.record": "Naɗa",
   "control.recordHint": "Kwafi a wannan waya, ban da abin da sabar ke ajiyewa.",
+  "control.noRoom": "Babu wuri",
+  "control.noRoomHint": "Ka sassauta wuri a wayar, sannan wannan zai sake aiki.",
   "control.stopRecording": "Daina naɗa",
   "control.stopRecordingHint": "Yana kammala naɗin kuma yana ajiye fayil a waya.",
   "control.photo": "Hoto",

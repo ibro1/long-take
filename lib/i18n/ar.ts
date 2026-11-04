@@ -56,6 +56,8 @@ export const ar: Record<StringKey, string> = {
   "control.logHint": "ما قاله المرمّز، بالترتيب.",
   "control.record": "تسجيل",
   "control.recordHint": "نسخة على هذا الجهاز، إضافة إلى ما يحفظه الخادم.",
+  "control.noRoom": "لا مساحة",
+  "control.noRoomHint": "أفرغ بعض المساحة على الهاتف ليعمل هذا مرة أخرى.",
   "control.stopRecording": "إيقاف التسجيل",
   "control.stopRecordingHint": "ينهي اللقطة ويحفظ الملف على الهاتف.",
   "control.photo": "صورة",

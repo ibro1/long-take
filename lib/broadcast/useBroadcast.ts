@@ -1640,12 +1640,14 @@ export function useBroadcast() {
 
   /**
    * Room on the phone, read every fifteen seconds while a take is running and
-   * once otherwise.
+   * every half minute otherwise.
    *
-   * It is a statvfs call, which costs nothing, but there is no point asking
-   * repeatedly while nothing is being written - the number cannot move on this
-   * app's account, and anything else filling the disk is a slower problem than
-   * the one this guard exists for.
+   * It is a statvfs call, which costs nothing. It used to be read once off air,
+   * on the reasoning that the number cannot move on this app's account - but
+   * the reading is what decides whether the Record control offers a take or
+   * says there is no room, and a figure from the moment the app opened is the
+   * wrong one to name a phone that has since filled up. Half a minute is fast
+   * enough for a disk and slow enough to be free.
    */
   useEffect(() => {
     const read = () => {
@@ -1658,8 +1660,7 @@ export function useBroadcast() {
       }
     };
     read();
-    if (!recording) return;
-    const timer = setInterval(read, 15000);
+    const timer = setInterval(read, recording ? 15000 : 30000);
     return () => clearInterval(timer);
   }, [recording]);
 
