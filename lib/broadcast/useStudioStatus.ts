@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { controlChannelFor, getStudioStatus } from "./overlays";
-import { publishStudioStatus } from "./studio-status";
+import { publishStudioStatus } from "./studio-status.ts";
 import type { Connection } from "./types";
 
 /**

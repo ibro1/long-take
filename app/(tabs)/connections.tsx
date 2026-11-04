@@ -80,6 +80,7 @@ import {
   unlinkAccount,
 } from "@/lib/broadcast/connections";
 import { isAccountConnection } from "@/lib/broadcast/account";
+import { FRAMEVANE_INGEST_RTMP } from "@/lib/product";
 import {
   accountLinkCodeFromUrl,
   type ClaimResult,
@@ -807,7 +808,7 @@ function blankConnection(): Connection {
   return {
     id: `conn_${Date.now().toString(36)}`,
     name: "",
-    server: "rtmp://framevane-live.linkfa.de:1935/live",
+    server: FRAMEVANE_INGEST_RTMP,
     streamKey: "",
     protocol: "rtmp",
     srtLatencyMs: DEFAULT_SETTINGS.srtLatencyMs,

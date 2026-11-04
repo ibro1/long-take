@@ -1,4 +1,5 @@
 import { activeConnection, listConnections } from "@/lib/broadcast/connections";
+import { FRAMEVANE_WEB } from "@/lib/product";
 import { pushLog } from "@/lib/broadcast/log";
 import * as Broadcaster from "@/modules/framevane-broadcaster";
 import type {
@@ -148,7 +149,7 @@ export function stamp(at: number): string {
  * anything - and the wrong one for a paired phone, whose own server publishes
  * both pages at the same paths.
  */
-const PUBLIC_SITE = "https://framevane.linkfa.de";
+const PUBLIC_SITE = FRAMEVANE_WEB;
 
 export function dashboardSite(): string {
   const paired = activeConnection()?.api ?? listConnections().find((c) => c.api)?.api;

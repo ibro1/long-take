@@ -1,5 +1,5 @@
 import type { HealthReport } from "./health";
-import { type StudioStatus, studioStatusFrom } from "./studio-status";
+import { type StudioStatus, studioStatusFrom } from "./studio-status.ts";
 import type { Connection } from "./types";
 
 /**

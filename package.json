@@ -3,7 +3,7 @@
   "main": "expo-router/entry",
   "version": "0.1.0",
   "homepage": "https://framevane.linkfa.de",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "dev": "expo start",
     "dev:android": "expo start -c --android",
@@ -97,5 +97,7 @@
   "trustedDependencies": [
     "tailwindcss",
     "nativewind"
-  ]
+  ],
+  "description": "Android live broadcaster: a Filmic-style camera and recorder that can stream to any RTMP or SRT server, and to the Framevane relay.",
+  "private": false
 }

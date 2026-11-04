@@ -8,7 +8,13 @@ answer either way.
 """
 import socket, struct, sys, time
 
-host, port = "framevane-live.linkfa.de", 8890
+if len(sys.argv) < 2:
+    print("usage: python3 scripts/check-srt.py <host> [port]", file=sys.stderr)
+    print("       checks that an SRT ingest edge answers on its UDP port", file=sys.stderr)
+    sys.exit(2)
+
+host = sys.argv[1]
+port = int(sys.argv[2]) if len(sys.argv) > 2 else 8890
 addr = socket.gethostbyname(host)
 print(f"{host} -> {addr}:{port}")
 
