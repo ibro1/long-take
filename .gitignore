@@ -48,3 +48,15 @@ expo-env.d.ts
 /android
 /ios
 notes.txt
+# credentials, never
+.env
+.env.*
+!.env.example
+*.keystore
+google-services.json
+google-services.json.bak
+
+# artefacts that are built, not written
+*.apk
+*.aab
+*.ipa
