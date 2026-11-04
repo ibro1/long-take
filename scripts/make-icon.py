@@ -126,6 +126,48 @@ def favicon(path):
     print(f"  {path}  {size}x{size}  no corners")
 
 
+def social(path, width=1280, height=640):
+    """
+    The card GitHub draws when someone shares the repository.
+
+    Without one, every link to this project unfurls as a grey rectangle with a
+    truncated title - a poor first impression for a project whose whole argument
+    is that it looks after the picture.
+
+    The mark is drawn on its own square and composited, because `draw_mark`
+    centres on a square canvas of the size it is given: handing it a 1280x640
+    card draws it at the card's height, four times over, off the edge.
+    """
+    card = Image.new("RGBA", (width, height), DARK)
+    unit = min(width, height)
+
+    square = canvas(unit, DARK)
+    draw_mark(square, unit, scale=0.72, corners=False)
+    side = int(unit * 0.42)
+    mark = finish(square, side)
+    card.paste(mark, (int((width - side) / 2), int(height * 0.13)), mark)
+
+    d = ImageDraw.Draw(card)
+    name = "LONG TAKE"
+    font = ImageFont.truetype(FONT_BOLD, int(unit * 0.105))
+    tracking = unit * 0.024
+    widths = [font.getlength(ch) for ch in name]
+    total = sum(widths) + tracking * (len(name) - 1)
+    x = (width - total) / 2
+    for ch, cw in zip(name, widths):
+        d.text((x, height * 0.585), ch, font=font, fill=INK)
+        x += cw + tracking
+
+    tag = "Open-source camera and broadcaster for Android"
+    tfont = ImageFont.truetype(FONT_BOLD, int(unit * 0.040))
+    d.text(((width - tfont.getlength(tag)) / 2, height * 0.760), tag, font=tfont, fill=DIM)
+
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    card.save(path, "PNG", optimize=True)
+    print(f"  {path}  {width}x{height}  social preview")
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     print("Long Take assets:")
@@ -133,3 +175,4 @@ if __name__ == "__main__":
     adaptive(1024, f"{OUT}/adaptive-icon.png")
     splash(1024, f"{OUT}/splash.png")
     favicon(f"{OUT}/favicon.png")
+    social("assets/brand/social-preview.png")
