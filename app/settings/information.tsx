@@ -43,7 +43,7 @@ export default function InformationSettingsScreen() {
     <Page title="Information">
       <Group title="This app">
         <NavRow
-          label="About Framevane"
+          label="About Long Take"
           value={String(Constants.expoConfig?.version ?? "")}
           onPress={() => nav.go("/settings/about")}
         />

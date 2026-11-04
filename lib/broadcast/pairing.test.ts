@@ -135,6 +135,34 @@ test("the account-link QR gives a studio and a code, never a destination", () =>
   assert.equal(accountLinkCodeFromUrl("framevane://linked?api=https://studio.example&code=AB"), null);
 });
 
+/**
+ * The app was called Framevane before it was called Long Take, and the QR codes
+ * drawn under the old name are still on walls, in screenshots and pinned in
+ * groups. Both schemes have to keep working: a rename that breaks pairing is a
+ * rename that breaks a broadcast.
+ */
+test("both schemes pair, and the old one pairs exactly as the new one", () => {
+  const link = (scheme: string) => `${scheme}://pair?server=rtmp://h/live&key=abc123&name=Test`;
+
+  const old = connectionFromPairingUrl(link("framevane"));
+  const next = connectionFromPairingUrl(link("longtake"));
+  assert.ok(old && next, "both schemes are understood");
+  assert.deepEqual(
+    { server: next.server, key: next.streamKey, name: next.name, protocol: next.protocol },
+    { server: old.server, key: old.streamKey, name: old.name, protocol: old.protocol },
+  );
+
+  // The account link follows the same rule.
+  assert.deepEqual(
+    accountLinkCodeFromUrl("longtake://link?api=https://studio.example&code=AB12"),
+    accountLinkCodeFromUrl("framevane://link?api=https://studio.example&code=AB12"),
+  );
+
+  // And a scheme that is neither is still refused, in both parsers.
+  assert.equal(connectionFromPairingUrl("other://pair?server=rtmp://h/live&key=abc"), null);
+  assert.equal(accountLinkCodeFromUrl("other://link?api=https://studio.example&code=AB12"), null);
+});
+
 test("a claim answer for the account becomes a link with its token", () => {
   const link = accountLinkFromClaim(
     { device: { api: "https://studio.example/", token: "fvd_Abc-123_x", name: "Sharhul" } },

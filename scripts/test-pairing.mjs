@@ -37,8 +37,8 @@ const check = (label, ok, detail = "") => {
 };
 
 /** Exactly how apps/dashboard/src/lib/streams/functions.ts builds it. */
-function dashboardLink({ server, key, name, w, h, fps, bitrate, api, token }) {
-  const link = new URL("framevane://pair");
+function dashboardLink({ scheme = "framevane", server, key, name, w, h, fps, bitrate, api, token }) {
+  const link = new URL(`${scheme}://pair`);
   link.searchParams.set("server", server);
   link.searchParams.set("key", key);
   link.searchParams.set("name", name);
@@ -210,6 +210,23 @@ for (const half of halves) {
     paired !== null && canPushOverlays(paired) === false,
   );
 }
+
+/**
+ * The app is called Long Take now; the codes drawn while it was Framevane are
+ * still on walls. Both schemes must give the same connection, or a rename
+ * breaks pairing on a live broadcast.
+ */
+const renamed = connectionFromPairingUrl(
+  dashboardLink({ scheme: "longtake", server: SERVER, key: KEY, name: NAME }),
+);
+check("the new scheme pairs too", renamed !== null);
+check(
+  "and pairs identically to the old one",
+  endpointFor(renamed) === endpointFor(rtmp) && renamed?.name === rtmp?.name,
+);
+check("a third scheme is still refused", connectionFromPairingUrl(
+  dashboardLink({ scheme: "other", server: SERVER, key: KEY, name: NAME }),
+) === null);
 
 check("a link that is not ours is refused", connectionFromPairingUrl("https://example.com") === null);
 check("nonsense is refused rather than thrown at", connectionFromPairingUrl("not a url") === null);

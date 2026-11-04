@@ -1,8 +1,10 @@
-# Framevane Broadcaster
+# Long Take
 
 A Filmic-style camera and recorder for Android that also streams. Point it at
 any RTMP or SRT server, or at a [Framevane](https://framevane.linkfa.de) relay
 and let the server do the rest.
+
+Long Take records. Framevane relays and composites.
 
 Built because the alternatives are either paid, closed, or send your video
 through somebody else's servers on the way to yours.

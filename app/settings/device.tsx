@@ -83,7 +83,7 @@ export default function DeviceSettingsScreen() {
               cannot continue in the background. The setting is still off.
               {notificationBlocked
                 ? " Android will not ask again from here, so it has to be turned on in settings."
-                : " Allow notifications for Framevane and try again."}
+                : " Allow notifications for Long Take and try again."}
             </Text>
             {notificationBlocked ? (
               <Pressable

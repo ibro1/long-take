@@ -1,6 +1,6 @@
 # Third-party notices
 
-Framevane Broadcaster is licensed under the GNU General Public License, version
+Long Take is licensed under the GNU General Public License, version
 3 or later (see `LICENSE`). It is built on other people's work, and this file
 lists the parts that are shipped inside the app together with the licence each
 one arrives under.
@@ -53,10 +53,13 @@ nothing here relicenses the Apache-2.0 parts on their own.
 ## Trademarks
 
 The licence grants copyright and patent permissions. It does not grant
-permission to use the Framevane name or logo:
+permission to use the Long Take or Framevane names, or the logo:
 
-- **Framevane**, the Framevane wordmark and the app icon are trademarks of
-  Davebukar Technologies.
+- **Long Take**, **Framevane**, their wordmarks and the app icon are trademarks
+  of Davebukar Technologies.
+- The `framevane:` deep-link scheme is still accepted so that QR codes drawn
+  before the rename keep working. That is compatibility with existing codes,
+  not permission to use the name.
 - A fork is welcome under the GPL. A fork distributed to other people must use
   its own name, icon and application id, so that users are not misled about
   where it came from.

@@ -166,10 +166,23 @@ function controlChannelFrom(url: URL): { api: string; controlToken: string } | u
   return { api: `${base.origin}${base.pathname.replace(/\/+$/, "")}`, controlToken: token };
 }
 
+/**
+ * The schemes a pairing link may arrive under.
+ *
+ * The app is called Long Take; the relay it pairs with is called Framevane, and
+ * it was the app's own name until the rename. Both are accepted, and
+ * `framevane:` is not going away: every QR code already drawn, screenshotted,
+ * printed on a wall or pinned in a group carries it, and the dashboard keeps
+ * emitting it until it too is deployed with the new name. A scheme is invisible
+ * to the operator - the only thing renaming it can do here is break pairing on
+ * a live broadcast, which is exactly what nobody needs on a Sunday morning.
+ */
+const PAIRING_SCHEMES = ["framevane:", "longtake:"];
+
 export function connectionFromPairingUrl(raw: string): Connection | null {
   try {
     const url = new URL(raw);
-    if (url.protocol !== "framevane:") return null;
+    if (!PAIRING_SCHEMES.includes(url.protocol)) return null;
     const server = url.searchParams.get("server");
     const key = url.searchParams.get("key");
     if (!server || !key) return null;
@@ -210,6 +223,7 @@ export function connectionFromPairingUrl(raw: string): Connection | null {
 /**
  * Reads the account-link QR from the dashboard's Phones section:
  *   framevane://link?api=https://studio.example&code=K7M4QP2X
+ *   longtake://link?api=...                       (same link, new name)
  *
  * Unlike a stream's pairing link this carries no credential, only a one-time
  * code and where to spend it - so a photo of the screen is worth nothing once
@@ -219,9 +233,11 @@ export function connectionFromPairingUrl(raw: string): Connection | null {
  * Told apart from a stream link by the word after the scheme, read off the
  * raw text rather than `URL.host`: a custom scheme's host is the part of URL
  * parsing runtimes disagree on, and this one has to agree with the scanner.
+ *
+ * Both schemes, for the same reason `PAIRING_SCHEMES` has both.
  */
 export function accountLinkCodeFromUrl(raw: string): { studio: string; code: string } | null {
-  if (!/^framevane:\/\/link(?:[/?]|$)/i.test(raw.trim())) return null;
+  if (!/^(?:framevane|longtake):\/\/link(?:[/?]|$)/i.test(raw.trim())) return null;
   try {
     const url = new URL(raw.trim());
     const studio = studioUrlFrom(url.searchParams.get("api") ?? "");

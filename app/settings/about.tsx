@@ -76,7 +76,7 @@ export default function AboutScreen() {
   return (
     <Page title="About">
       <Group>
-        <ReadoutRow label="App" value={Constants.expoConfig?.name ?? "Framevane"} />
+        <ReadoutRow label="App" value={Constants.expoConfig?.name ?? "Long Take"} />
         <Pressable
           // Not announced as a button: it is still a readout to everyone who
           // is not looking for the performance log.
@@ -115,7 +115,7 @@ export default function AboutScreen() {
       ) : null}
 
       <Text className="px-1 text-sm text-muted-foreground">
-        Framevane sends the camera and the microphone on this phone to a server you run yourself,
+        Long Take sends the camera and the microphone on this phone to a server you run yourself,
         over RTMP or SRT, and can keep a copy on the phone while it does. There is no account
         behind it: a destination is paired by scanning a code on your own dashboard, and the stream
         key that comes with it stays on this device.

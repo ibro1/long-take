@@ -1,5 +1,5 @@
 {
-  "name": "framevane-broadcaster",
+  "name": "long-take",
   "main": "expo-router/entry",
   "version": "0.1.0",
   "homepage": "https://framevane.linkfa.de",
@@ -98,6 +98,6 @@
     "tailwindcss",
     "nativewind"
   ],
-  "description": "Android live broadcaster: a Filmic-style camera and recorder that can stream to any RTMP or SRT server, and to the Framevane relay.",
+  "description": "A Filmic-style camera and recorder for Android that also streams to any RTMP or SRT server.",
   "private": false
 }

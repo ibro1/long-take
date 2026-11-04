@@ -1,9 +1,12 @@
 {
   "expo": {
-    "name": "Framevane",
-    "slug": "framevane-broadcaster",
+    "name": "Long Take",
+    "slug": "long-take",
     "owner": "netlinko",
-    "scheme": "framevane",
+    "scheme": [
+      "framevane",
+      "longtake"
+    ],
     "version": "1.0.0",
     "newArchEnabled": true,
     "orientation": "default",
