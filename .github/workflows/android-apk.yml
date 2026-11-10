@@ -77,6 +77,11 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
+      - name: Accept Android licenses
+        run: |
+          yes | sdkmanager --licenses || true
+          echo "Licenses accepted"
+
       - name: Build (android · ${{ steps.profile.outputs.value }} · ${{ steps.build_mode.outputs.value }})
         run: |
           mkdir -p build-output
