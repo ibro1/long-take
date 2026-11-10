@@ -73,7 +73,6 @@
           "recordAudioAndroid": true
         }
       ],
-      "@sentry/react-native/expo",
       "./plugins/with-backup-rules"
     ],
     "experiments": {
