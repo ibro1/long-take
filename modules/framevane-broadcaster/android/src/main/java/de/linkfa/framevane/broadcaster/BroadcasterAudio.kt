@@ -870,7 +870,7 @@ private fun BroadcasterView.activeRecording(): AudioRecordingConfiguration? {
  * of phones that can act as a sink; asking for SCO on account of one would
  * connect a different device than the one named.
  */
-private fun needsBluetoothLink(type: Int): Boolean =
+internal fun needsBluetoothLink(type: Int): Boolean =
   type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || type == AudioDeviceInfo.TYPE_BLE_HEADSET
 
 /**

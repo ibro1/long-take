@@ -262,9 +262,10 @@ private fun BroadcasterView.scheduleRouteRecheck() {
 /**
  * Puts the operator back on the microphone they chose, if they are not on it.
  *
- * Only ever for a Bluetooth headset, because that is the one whose route can be
- * taken away while the recorder keeps running. A wired microphone unplugged is
- * a different event and the device list already reports it.
+ * A call or another app can take the microphone away from any input - not only
+ * Bluetooth. For Bluetooth the SCO link must be re-asked for; for wired, USB
+ * and built-in mics the AudioRecord simply needs to be reopened (off-air) or
+ * re-pointed (live) so Android routes it back to the chosen device.
  */
 internal fun BroadcasterView.checkAudioRoute() {
   if (recordingFromChosenDevice()) {
@@ -276,7 +277,22 @@ internal fun BroadcasterView.checkAudioRoute() {
   if (now - lastRouteFix < ROUTE_SETTLE_MS) return
   lastRouteFix = now
 
-  reacquireAudioRoute()
+  val chosen = selectedInputDevice()
+  val isBluetooth = chosen != null && needsBluetoothLink(chosen.type)
+
+  if (isBluetooth) {
+    reacquireAudioRoute()
+  } else if (stream.isStreaming || stream.isRecording) {
+    // Live: we cannot restart the microphone, but we can re-apply the preferred
+    // device so Android routes the existing AudioRecord back to it.
+    runCatching { microphone.setPreferredDevice(chosen) }
+    log(LOG_INFO, "Re-applying preferred device for live recovery: ${chosen?.let { nameOf(it) } ?: "Android default"}")
+  } else {
+    // Off-air: restart the microphone so a fresh AudioRecord picks up the chosen device.
+    log(LOG_INFO, "Restoring microphone after interruption for ${chosen?.let { nameOf(it) } ?: "Android default"}")
+    restoreMicrophone()
+  }
+
   scheduleRouteRecheck()
 
   /**
