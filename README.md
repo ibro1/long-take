@@ -38,6 +38,7 @@ the Framevane relay, the app is simply a good broadcaster.
 ![Live broadcast](assets/screenshots/live-broadcast.png)
 ![Color grading](assets/screenshots/color-grading.png)
 ![Settings panel](assets/screenshots/settings.png)
+![App preview](assets/screenshots/app-preview.png)
 
 ## State of it
 
