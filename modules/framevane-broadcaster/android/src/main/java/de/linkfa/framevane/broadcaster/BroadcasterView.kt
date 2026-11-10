@@ -859,10 +859,51 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    * as the class went on.
    */
   @Volatile
-  private var cameraLost = false
+  internal var cameraLost = false
   private var cameraRecoveries = 0
   private val cameraHandler = android.os.Handler(android.os.Looper.getMainLooper())
   private val recoverCamera = Runnable { reopenCamera() }
+
+  /**
+   * Frame delivery watchdog - detects when the camera preview has frozen.
+   *
+   * A camera can be "open" (callbacks say it's open) but the pipeline stalled:
+   * thermal throttling slows the CPU/GPU, buffer queue fills, SurfaceTexture
+   * stops updating. The capture result callback stops firing, but nothing
+   * explicitly reports an error. This watchdog detects that silence.
+   */
+  private val frameWatchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  private val frameWatchdogRunnable = Runnable { checkFrameDelivery() }
+  private const val FRAME_WATCHDOG_MS = 5_000L // 5 seconds without frames = frozen
+  private var frameWatchdogArmed = false
+
+  private fun armFrameWatchdog() {
+    if (frameWatchdogArmed) return
+    frameWatchdogArmed = true
+    lastCaptureResultAt = android.os.SystemClock.uptimeMillis()
+    frameWatchdogHandler.postDelayed(frameWatchdogRunnable, FRAME_WATCHDOG_MS)
+  }
+
+  private fun disarmFrameWatchdog() {
+    if (!frameWatchdogArmed) return
+    frameWatchdogArmed = false
+    frameWatchdogHandler.removeCallbacks(frameWatchdogRunnable)
+  }
+
+  private fun checkFrameDelivery() {
+    val now = android.os.SystemClock.uptimeMillis()
+    val sinceLastFrame = now - lastCaptureResultAt
+    if (sinceLastFrame >= FRAME_WATCHDOG_MS) {
+      log(LOG_WARN, "Camera preview frozen - no frames for ${sinceLastFrame}ms; restarting camera")
+      onCameraGone("preview frozen (no frames for ${sinceLastFrame}ms)")
+    }
+    // Re-arm if camera is still meant to be running
+    if (cameraLost || (stream.isStreaming || stream.isRecording || monitoring)) {
+      frameWatchdogHandler.postDelayed(frameWatchdogRunnable, FRAME_WATCHDOG_MS)
+    } else {
+      frameWatchdogArmed = false
+    }
+  }
 
   private fun watchCamera() {
     runCatching {
@@ -875,6 +916,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
             cameraLost = false
             cameraRecoveries = 0
             cameraHandler.removeCallbacks(recoverCamera)
+            armFrameWatchdog()
           }
         }
 
@@ -1011,18 +1053,22 @@ class BroadcasterView(context: Context, appContext: AppContext) :
       )
     }
     cameraLost = true
-    if (live) scheduleCameraRecovery()
+    disarmFrameWatchdog()
+    // Always attempt recovery - preview freezing off-air is just as bad as live
+    scheduleCameraRecovery()
   }
 
   /**
-   * Try to take the camera back, while live, without waiting for the operator.
+   * Try to take the camera back, without waiting for the operator.
+   *
+   * Works both live and off-air: a frozen preview is useless either way.
    *
    * Quickly at first and then every ten seconds: in the background the system
    * may refuse until the app is in front again, and asking every two seconds
    * for an hour would only fill the log. Coming back to the app reopens it
    * regardless, through the surface.
    */
-  private fun scheduleCameraRecovery() {
+  internal fun scheduleCameraRecovery() {
     cameraHandler.removeCallbacks(recoverCamera)
     val delay = if (cameraRecoveries < 3) 1_500L else 10_000L
     cameraHandler.postDelayed(recoverCamera, delay)
@@ -1030,7 +1076,6 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
   private fun reopenCamera() {
     if (!cameraLost) return
-    if (!stream.isStreaming && !stream.isRecording) return
     cameraRecoveries += 1
     synchronized(this) {
       runCatching {

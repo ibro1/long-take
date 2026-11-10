@@ -79,6 +79,21 @@ internal fun BroadcasterView.watchThermal() {
     post {
       runCatching { onThermal(mapOf("status" to status, "name" to thermalName(status))) }
     }
+
+    /**
+     * Thermal throttling response: when the phone reaches SEVERE or CRITICAL,
+     * the CPU/GPU slows down which stalls the camera preview pipeline.
+     * Restart the camera session to clear any stalled buffers and get a fresh
+     * capture session at the throttled performance level.
+     */
+    if (status >= PowerManager.THERMAL_STATUS_SEVERE) {
+      post {
+        if (cameraLost) return@post // Already recovering
+        log(LOG_WARN, "Thermal status ${thermalName(status)} - restarting camera session to clear stalled pipeline")
+        cameraLost = true
+        scheduleCameraRecovery()
+      }
+    }
   }
 
   runCatching { power.addThermalStatusListener(context.mainExecutor, watch) }.onFailure {
