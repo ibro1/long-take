@@ -86,14 +86,13 @@ jobs:
         run: |
           mkdir -p build-output
           if [ "${{ steps.build_mode.outputs.value }}" = "local" ]; then
-            # Local build on GitHub runner (like Klipara) - with verbose Gradle
+            # Local build on GitHub runner - pass Gradle flags via GRADLE_OPTS
             eas build \
               --platform android \
               --profile ${{ steps.profile.outputs.value }} \
               --local \
               --non-interactive \
-              --output "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk" \
-              -- --stacktrace --info
+              --output "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk"
           else
             # Cloud build on EAS servers
             eas build \
@@ -104,7 +103,7 @@ jobs:
           fi
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          GRADLE_OPTS: "-Xmx4g -XX:+HeapDumpOnOutOfMemoryError"
+          GRADLE_OPTS: "-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -Dorg.gradle.jvmargs=-Xmx4g"
 
       - name: Download cloud artifacts (if cloud build)
         if: ${{ steps.build_mode.outputs.value == 'cloud' }}
