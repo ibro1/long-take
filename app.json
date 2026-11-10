@@ -12,12 +12,9 @@
     "orientation": "default",
     "userInterfaceStyle": "dark",
     "icon": "./assets/images/icon.png",
-    "runtimeVersion": {
-      "policy": "fingerprint"
-    },
+    "runtimeVersion": "1.0.0",
     "updates": {
       "enabled": true,
-      "url": "https://u.expo.dev/8654f4d2-70f7-40b2-b386-a09e9538f95c",
       "fallbackToCacheTimeout": 0,
       "checkAutomatically": "ON_ERROR_RECOVERY",
       "requestHeaders": {
