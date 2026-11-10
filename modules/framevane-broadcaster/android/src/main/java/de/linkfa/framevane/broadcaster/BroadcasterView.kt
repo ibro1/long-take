@@ -241,6 +241,134 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   }
 
   /**
+   * AGGRESSIVE THERMAL LADDER: proactively reduce encoder load as phone heats.
+   *
+   * Called from thermal watcher when status changes. Each rung reduces bitrate,
+   * fps, and optionally resolution to keep the pipeline running within the
+   * throttled thermal budget. This prevents the freeze that happens when
+   * thermal throttling slows GL rendering and stalls the shared SurfaceTexture.
+   *
+   * Bitrate changes take effect immediately via MediaCodec parameters.
+   * FPS/resolution changes require encoder restart (reconnect).
+   *
+   * @param bitrateFraction fraction of configured bitrate (1.0 = full)
+   * @param targetFps target frame rate (0 = keep current)
+   * @param targetResolution target resolution (null = keep current)
+   */
+  internal fun applyThermalLadder(
+    bitrateFraction: Double,
+    targetFps: Int,
+    targetResolution: Size?,
+  ) {
+    // Clamp to thermal cap range (0.25 to 1.0)
+    val clampedFraction = bitrateFraction.coerceIn(MIN_THERMAL_CAP, 1.0)
+    thermalBitrateCap = clampedFraction
+
+    // Apply bitrate cap immediately (works on the fly)
+    applyBitrateCap()
+
+    // Track original settings for restoration
+    if (configuredFps == 0) configuredFps = videoFps
+    if (configuredWidth == 0) configuredWidth = videoWidth
+    if (configuredHeight == 0) configuredHeight = videoHeight
+
+    // Reduce fps if specified (requires reconnect)
+    if (targetFps > 0 && targetFps != videoFps) {
+      videoFps = targetFps
+      if (stream.isStreaming) {
+        log(LOG_WARN, "Thermal ladder: fps reduced to $targetFps - reconnecting encoder")
+        reconnect()
+      }
+    }
+
+    // Reduce resolution if specified (requires reconnect)
+    targetResolution?.let { size ->
+      if (size.width != videoWidth || size.height != videoHeight) {
+        videoWidth = size.width
+        videoHeight = size.height
+        if (stream.isStreaming) {
+          log(LOG_WARN, "Thermal ladder: resolution changed to ${size.width}x${size.height} - reconnecting encoder")
+          reconnect()
+        }
+      }
+    }
+
+    log(LOG_WARN, "Thermal ladder applied: bitrate ${(clampedFraction * 100).roundToInt()}%, fps $targetFps, res ${targetResolution?.width}x${targetResolution?.height ?: "unchanged"}")
+  }
+
+  /**
+   * Lift thermal ladder when phone cools down.
+   * Restores full bitrate, fps, and resolution.
+   */
+  internal fun liftThermalLadder() {
+    if (thermalBitrateCap >= 1.0) return
+
+    thermalBitrateCap = 1.0
+    applyBitrateCap()
+
+    var needsReconnect = false
+
+    // Restore original fps if it was reduced
+    if (configuredFps > 0 && videoFps != configuredFps) {
+      videoFps = configuredFps
+      needsReconnect = true
+    }
+
+    // Restore original resolution if it was reduced
+    if (configuredWidth > 0 && (videoWidth != configuredWidth || videoHeight != configuredHeight)) {
+      videoWidth = configuredWidth
+      videoHeight = configuredHeight
+      needsReconnect = true
+    }
+
+    if (needsReconnect && stream.isStreaming) {
+      log(LOG_INFO, "Thermal ladder lifted: reconnecting to restore fps/resolution")
+      reconnect()
+    } else {
+      log(LOG_INFO, "Thermal ladder fully lifted: bitrate 100%, fps $videoFps, res ${videoWidth}x${videoHeight}")
+    }
+  }
+
+  /**
+   * Reconnect the encoder with current video settings.
+   * Used by thermal ladder when fps/resolution changes require encoder restart.
+   */
+  private fun reconnect() {
+    if (!stream.isStreaming) return
+    val url = currentDestinationUrl ?: return
+    log(LOG_INFO, "Thermal ladder: reconnecting encoder with ${videoWidth}x${videoHeight}@${videoFps}fps")
+    // Stop and restart stream with new settings
+    runCatching { stream.stopStream() }
+    markUnprepared()
+    // The library clears isStreaming on stopStream, so we can start again
+    prepare(videoOnly = false)
+    runCatching { stream.startStream(srtDestination(url)) }.onFailure {
+      log(LOG_ERROR, "Thermal ladder reconnect failed: ${it.message}")
+    }
+  }
+
+  /** Current destination URL for reconnect. */
+  private var currentDestinationUrl: String? = null
+
+  /**
+   * Starts stream and stores URL for thermal ladder reconnect.
+   * Called from module instead of directly calling stream.startStream.
+   */
+  internal fun startStreamWithUrl(url: String) {
+    currentDestinationUrl = url
+    stream.startStream(srtDestination(url))
+  }
+
+  internal fun setCurrentDestinationUrl(url: String?) {
+    currentDestinationUrl = url
+  }
+
+  /** Configured (original) video settings for thermal ladder restoration. */
+  private var configuredFps = 0
+  private var configuredWidth = 0
+  private var configuredHeight = 0
+
+  /**
    * The operator's own bitrate change, under the cap.
    *
    * The configured rate becomes what was asked for - it is what the cap is a

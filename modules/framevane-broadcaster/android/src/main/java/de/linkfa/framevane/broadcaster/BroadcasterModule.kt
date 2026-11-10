@@ -302,7 +302,7 @@ class BroadcasterModule : Module() {
         v.monitorAudio(true)
 
         v.clearMonitorForAir()
-        runCatching { v.stream.startStream(v.srtDestination(url)) }.onFailure {
+        runCatching { v.startStreamWithUrl(v.srtDestination(url)) }.onFailure {
           /**
            * The library sets isStreaming before it opens anything and does not
            * unset it when a later step throws, so a failed start leaves the
@@ -312,6 +312,7 @@ class BroadcasterModule : Module() {
            * the difference between one failure and every subsequent one.
            */
           runCatching { v.stream.stopStream() }
+          v.setCurrentDestinationUrl(null)
           v.markUnprepared()
           v.log(LOG_WARN, "The broadcast would not start: ${it.message}")
           throw it
@@ -339,7 +340,10 @@ class BroadcasterModule : Module() {
        */
       v.hideSlate()
       if (v.stream.isRecording) runCatching { v.stopRecording() }
-      if (v.stream.isStreaming) v.stream.stopStream()
+      if (v.stream.isStreaming) {
+        v.stream.stopStream()
+        v.setCurrentDestinationUrl(null)
+      }
       // Stopping the stream stops the encoders with it, so they have to be
       // prepared again before anything else can use them.
       v.markUnprepared()
