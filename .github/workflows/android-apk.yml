@@ -25,6 +25,9 @@ jobs:
     name: Build Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - name: 📦 Checkout repository
         uses: actions/checkout@v4
@@ -40,7 +43,7 @@ jobs:
       - name: 📱 Configure version
         run: |
           echo "Setting version to ${{ github.event.inputs.version }}"
-          npx expo version ${{ github.event.inputs.version }}
+          npx expo version "${{ github.event.inputs.version }}"
 
       - name: 🏗️ Build Android APK via EAS
         run: |
