@@ -71,6 +71,12 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Using version: $VERSION"
 
+      - name: Initialize EAS project (if not already)
+        run: |
+          eas init --account netlinko --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
       - name: Build (android · ${{ steps.profile.outputs.value }} · ${{ steps.build_mode.outputs.value }})
         run: |
           mkdir -p build-output
