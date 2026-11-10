@@ -14,7 +14,7 @@
     "icon": "./assets/images/icon.png",
     "runtimeVersion": "1.0.0",
     "updates": {
-      "enabled": true,
+      "enabled": false,
       "fallbackToCacheTimeout": 0,
       "checkAutomatically": "ON_ERROR_RECOVERY",
       "requestHeaders": {
