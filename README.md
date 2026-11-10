@@ -35,6 +35,10 @@ live broadcast, still recording to the phone if you want it.
 Nothing about the camera or the standard streaming is gated. If you never touch
 the Framevane relay, the app is simply a good broadcaster.
 
+![Viewfinder, portrait](assets/screenshots/portrait.png)
+![Viewfinder, landscape](assets/screenshots/landscape.png)
+![Live broadcast, portrait](assets/screenshots/portrait-live.png)
+
 ## State of it
 
 **Android works. iOS does not yet.** The native module builds and runs on iOS
