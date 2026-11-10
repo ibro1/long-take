@@ -12,96 +12,123 @@ on:
           - production
           - preview
           - development
+      build_mode:
+        description: 'Where to run the build'
+        required: false
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - cloud
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build Android APK
+  android:
+    name: "android"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: ${{ github.workspace }}
+    permissions:
+      contents: write
     steps:
-      - name: 📦 Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Determine profile
+        id: profile
+        run: |
+          echo "value=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
 
-      - name: 📦 Setup Bun
+      - name: Determine build mode
+        id: build_mode
+        run: |
+          echo "value=${{ github.event.inputs.build_mode }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          docker image prune -af 2>/dev/null || true
+          df -h /
+
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
-      - name: 📦 Install dependencies
-        run: bun install
-        shell: bash
-
-      - name: 🔧 Setup EAS
+      - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: 📖 Read version from app.json
+      - name: Install dependencies
+        run: bun install
+
+      - name: Read version from app.json
         id: version
         run: |
           VERSION=$(cat app.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Using version: $VERSION"
 
-      - name: 🆕 Initialize EAS project (if not already)
+      - name: Build (android · ${{ steps.profile.outputs.value }} · ${{ steps.build_mode.outputs.value }})
         run: |
-          eas init --account netlinko --non-interactive
+          mkdir -p build-output
+          if [ "${{ steps.build_mode.outputs.value }}" = "local" ]; then
+            # Local build on GitHub runner (like Klipara)
+            eas build \
+              --platform android \
+              --profile ${{ steps.profile.outputs.value }} \
+              --local \
+              --non-interactive \
+              --output "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk"
+          else
+            # Cloud build on EAS servers
+            eas build \
+              --platform android \
+              --profile ${{ steps.profile.outputs.value }} \
+              --non-interactive \
+              --wait
+          fi
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
-      - name: 🏗️ Build Android APK via EAS
-        run: |
-          eas build \
-            --platform android \
-            --profile ${{ github.event.inputs.profile }} \
-            --non-interactive \
-            --wait
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-
-      - name: 📥 Download build artifacts
+      - name: Download cloud artifacts (if cloud build)
+        if: ${{ steps.build_mode.outputs.value == 'cloud' }}
         uses: actions/download-artifact@v4
         with:
           name: eas-build-android
-          path: ./artifacts
+          path: ./build-output
 
-      - name: 📦 Prepare release assets
+      - name: Rename cloud artifacts for consistency
+        if: ${{ steps.build_mode.outputs.value == 'cloud' }}
         run: |
-          ls -la ./artifacts/
-          APK_PATH=$(find ./artifacts -name "*.apk" | head -1)
-          AAB_PATH=$(find ./artifacts -name "*.aab" | head -1)
-          echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "AAB_PATH=$AAB_PATH" >> $GITHUB_OUTPUT
-        id: artifacts
+          ls -la build-output/
+          APK_PATH=$(find build-output -name "*.apk" | head -1)
+          if [ -n "$APK_PATH" ]; then
+            mv "$APK_PATH" "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk"
+          fi
+          AAB_PATH=$(find build-output -name "*.aab" | head -1)
+          if [ -n "$AAB_PATH" ]; then
+            mv "$AAB_PATH" "build-output/long-take-android-${{ steps.profile.outputs.value }}.aab"
+          fi
 
-      - name: 🚀 Create GitHub Release
+      - name: Publish to GitHub Release
         uses: softprops/action-gh-release@v1
-        if: ${{ steps.artifacts.outputs.APK_PATH != '' }}
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: "Long Take v${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: |
-            ${{ steps.artifacts.outputs.APK_PATH }}
-            ${{ steps.artifacts.outputs.AAB_PATH }}
+          files: build-output/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 📋 Output build info
+      - name: Output build info
         run: |
           echo "Build completed successfully!"
           echo "Version: ${{ steps.version.outputs.version }}"
-          echo "Profile: ${{ github.event.inputs.profile }}"
-          echo "APK: ${{ steps.artifacts.outputs.APK_PATH }}"
-          echo "AAB: ${{ steps.artifacts.outputs.AAB_PATH }}"
+          echo "Profile: ${{ steps.profile.outputs.value }}"
+          echo "Mode: ${{ steps.build_mode.outputs.value }}"
+          ls -la build-output/
