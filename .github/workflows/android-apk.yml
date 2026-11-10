@@ -3,10 +3,6 @@ name: Build Android APK
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version name (e.g., 1.0.0)'
-        required: true
-        type: string
       profile:
         description: 'EAS build profile'
         required: false
@@ -40,10 +36,12 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: 📱 Configure version
+      - name: 📖 Read version from app.json
+        id: version
         run: |
-          echo "Setting version to ${{ github.event.inputs.version }}"
-          npx expo version "${{ github.event.inputs.version }}"
+          VERSION=$(cat app.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
 
       - name: 🏗️ Build Android APK via EAS
         run: |
@@ -74,8 +72,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: ${{ steps.artifacts.outputs.APK_PATH != '' }}
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: "Long Take v${{ github.event.inputs.version }}"
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "Long Take v${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -88,7 +86,7 @@ jobs:
       - name: 📋 Output build info
         run: |
           echo "Build completed successfully!"
-          echo "Version: ${{ github.event.inputs.version }}"
+          echo "Version: ${{ steps.version.outputs.version }}"
           echo "Profile: ${{ github.event.inputs.profile }}"
           echo "APK: ${{ steps.artifacts.outputs.APK_PATH }}"
           echo "AAB: ${{ steps.artifacts.outputs.AAB_PATH }}"
