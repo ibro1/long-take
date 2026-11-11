@@ -61,3 +61,9 @@ google-services.json.bak
 *.apk
 *.aab
 *.ipa
+
+# Gradle output inside the native module. The `/android` entry above is
+# root-anchored on purpose, so it does not cover modules/*/android/build.
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/

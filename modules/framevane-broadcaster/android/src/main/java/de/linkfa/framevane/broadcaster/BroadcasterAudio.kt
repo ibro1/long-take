@@ -825,7 +825,7 @@ private fun BroadcasterView.stopWatchingForLink() {
 }
 
 /** The device the operator chose, looked up fresh, or null for Android's choice. */
-private fun BroadcasterView.selectedInputDevice(): AudioDeviceInfo? {
+internal fun BroadcasterView.selectedInputDevice(): AudioDeviceInfo? {
   if (selectedAudioDeviceId < 0) return null
   val manager = audioManager ?: return null
   return runCatching {
@@ -901,7 +901,7 @@ internal fun BroadcasterView.micGain(): Float =
  * Pixel 7". The kind is what tells the operator which one to pick, so it leads,
  * and the product name only follows when it says something the kind does not.
  */
-private fun nameOf(device: AudioDeviceInfo): String {
+internal fun nameOf(device: AudioDeviceInfo): String {
   val kind = labelOf(device.type)
   val product = runCatching { device.productName?.toString() }.getOrNull()?.trim().orEmpty()
   return if (product.isEmpty() || device.type == AudioDeviceInfo.TYPE_BUILTIN_MIC) {

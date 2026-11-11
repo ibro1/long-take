@@ -80,7 +80,9 @@
     "react-native-worklets": "0.5.1",
     "sql.js": "^1.13.0",
     "tailwind-merge": "^2.6.0",
+    "tailwindcss": "3.4.1",
     "tailwindcss-animate": "^1.0.7",
+    "typescript": "~5.9.2",
     "zod": "^3.24.1",
     "zustand": "^4.5.6"
   },
@@ -90,9 +92,7 @@
     "@expo/ngrok": "^4.1.0",
     "@types/react": "~19.1.10",
     "@types/sql.js": "^1.4.9",
-    "drizzle-kit": "^0.31.1",
-    "tailwindcss": "3.4.1",
-    "typescript": "~5.9.2"
+    "drizzle-kit": "^0.31.1"
   },
   "trustedDependencies": [
     "tailwindcss",

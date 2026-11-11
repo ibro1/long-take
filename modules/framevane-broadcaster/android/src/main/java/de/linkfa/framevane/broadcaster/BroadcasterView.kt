@@ -19,6 +19,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaCodec
 import android.net.Uri
+import android.util.Size
 import android.os.BatteryManager
 import android.os.Handler
 import android.view.PixelCopy
@@ -1002,14 +1003,14 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   private val frameWatchdogHandler = android.os.Handler(android.os.Looper.getMainLooper())
   private val frameWatchdogRunnable = Runnable { checkFrameDelivery() }
-  private const val FRAME_WATCHDOG_MS = 5_000L // 5 seconds without frames = frozen
+  private val frameWatchdogMs = 5_000L // 5 seconds without frames = frozen
   private var frameWatchdogArmed = false
 
   private fun armFrameWatchdog() {
     if (frameWatchdogArmed) return
     frameWatchdogArmed = true
     lastCaptureResultAt = android.os.SystemClock.uptimeMillis()
-    frameWatchdogHandler.postDelayed(frameWatchdogRunnable, FRAME_WATCHDOG_MS)
+    frameWatchdogHandler.postDelayed(frameWatchdogRunnable, frameWatchdogMs)
   }
 
   private fun disarmFrameWatchdog() {
@@ -1021,13 +1022,13 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   private fun checkFrameDelivery() {
     val now = android.os.SystemClock.uptimeMillis()
     val sinceLastFrame = now - lastCaptureResultAt
-    if (sinceLastFrame >= FRAME_WATCHDOG_MS) {
+    if (sinceLastFrame >= frameWatchdogMs) {
       log(LOG_WARN, "Camera preview frozen - no frames for ${sinceLastFrame}ms; restarting camera")
       onCameraGone("preview frozen (no frames for ${sinceLastFrame}ms)")
     }
     // Re-arm if camera is still meant to be running
     if (cameraLost || (stream.isStreaming || stream.isRecording || monitoring)) {
-      frameWatchdogHandler.postDelayed(frameWatchdogRunnable, FRAME_WATCHDOG_MS)
+      frameWatchdogHandler.postDelayed(frameWatchdogRunnable, frameWatchdogMs)
     } else {
       frameWatchdogArmed = false
     }
