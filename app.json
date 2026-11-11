@@ -14,12 +14,13 @@
     "icon": "./assets/images/icon.png",
     "runtimeVersion": "1.0.0",
     "updates": {
-      "enabled": false,
+      "enabled": true,
       "fallbackToCacheTimeout": 0,
       "checkAutomatically": "ON_ERROR_RECOVERY",
       "requestHeaders": {
         "expo-channel-name": "preview"
-      }
+      },
+      "url": "https://u.expo.dev/a631491f-9592-4d65-b162-a68e03e040ee"
     },
     "splash": {
       "image": "./assets/images/splash.png",
@@ -77,7 +78,10 @@
     },
     "extra": {
       "router": {},
-      "sentryDsn": ""
+      "sentryDsn": "",
+      "eas": {
+        "projectId": "a631491f-9592-4d65-b162-a68e03e040ee"
+      }
     }
   }
 }

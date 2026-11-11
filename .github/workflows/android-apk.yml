@@ -1,12 +1,23 @@
 name: Build Android APK
 
+# Package manager: npm, deliberately.
+#
+# EAS's build image ships bun 1.2.x, which cannot parse the `bun.lock`
+# (lockfileVersion 2) that a current bun writes, so `bun install
+# --frozen-lockfile` dies with "Unknown lockfile version". This project ships a
+# package-lock.json, so npm is the installer both here and inside EAS — one
+# lockfile, no version drift. Never add a `bun install` step before `eas build`:
+# it leaves a dirty bun.lock that EAS uploads and then fails to parse.
+#
+# `cloud` builds on EAS servers; `local` builds on this runner (Klipara-style).
+
 on:
   workflow_dispatch:
     inputs:
       profile:
         description: 'EAS build profile'
         required: false
-        default: 'production'
+        default: 'preview'
         type: choice
         options:
           - production
@@ -15,32 +26,22 @@ on:
       build_mode:
         description: 'Where to run the build'
         required: false
-        default: 'local'
+        default: 'cloud'
         type: choice
         options:
-          - local
           - cloud
+          - local
 
 permissions:
   contents: write
 
 jobs:
   android:
-    name: "android"
+    name: "android · ${{ github.event.inputs.profile }} · ${{ github.event.inputs.build_mode }}"
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Determine profile
-        id: profile
-        run: |
-          echo "value=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
-
-      - name: Determine build mode
-        id: build_mode
-        run: |
-          echo "value=${{ github.event.inputs.build_mode }}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
 
       - name: Free disk space
@@ -50,10 +51,13 @@ jobs:
           docker image prune -af 2>/dev/null || true
           df -h /
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (npm)
+        run: npm ci --no-audit --no-fund
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
@@ -61,86 +65,83 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Install dependencies
-        run: bun install
-
       - name: Read version from app.json
         id: version
         run: |
-          VERSION=$(cat app.json | grep '"version"' | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION=$(node -p "require('./app.json').expo.version")
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Using version: $VERSION"
 
-      - name: Initialize EAS project (if not already)
-        run: |
-          eas init --account netlinko --non-interactive
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      # The EAS project is already linked: extra.eas.projectId in app.json is
+      # the project `netlinko/long-take`. `eas init` is deliberately absent —
+      # run against an already-linked project it fails, and adding the account
+      # flag creates a second project under the same slug.
 
-      - name: Accept Android licenses
-        run: |
-          yes | sdkmanager --licenses || true
-          echo "Licenses accepted"
+      - name: Accept Android SDK licenses
+        if: ${{ github.event.inputs.build_mode == 'local' }}
+        run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
-      - name: Build (android · ${{ steps.profile.outputs.value }} · ${{ steps.build_mode.outputs.value }})
+      - name: Build on EAS servers
+        if: ${{ github.event.inputs.build_mode == 'cloud' }}
         run: |
           mkdir -p build-output
-          if [ "${{ steps.build_mode.outputs.value }}" = "local" ]; then
-            # Local build on GitHub runner - pass Gradle flags via GRADLE_OPTS
-            eas build \
-              --platform android \
-              --profile ${{ steps.profile.outputs.value }} \
-              --local \
-              --non-interactive \
-              --output "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk"
-          else
-            # Cloud build on EAS servers
-            eas build \
-              --platform android \
-              --profile ${{ steps.profile.outputs.value }} \
-              --non-interactive \
-              --wait
-          fi
+          eas build \
+            --platform android \
+            --profile ${{ github.event.inputs.profile }} \
+            --non-interactive \
+            --wait
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          GRADLE_OPTS: "-Xmx4g -XX:+HeapDumpOnOutOfMemoryError -Dorg.gradle.jvmargs=-Xmx4g"
 
-      - name: Download cloud artifacts (if cloud build)
-        if: ${{ steps.build_mode.outputs.value == 'cloud' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: eas-build-android
-          path: ./build-output
-
-      - name: Rename cloud artifacts for consistency
-        if: ${{ steps.build_mode.outputs.value == 'cloud' }}
+      - name: Fetch the cloud artifact
+        if: ${{ github.event.inputs.build_mode == 'cloud' }}
         run: |
-          ls -la build-output/
-          APK_PATH=$(find build-output -name "*.apk" | head -1)
-          if [ -n "$APK_PATH" ]; then
-            mv "$APK_PATH" "build-output/long-take-android-${{ steps.profile.outputs.value }}.apk"
-          fi
-          AAB_PATH=$(find build-output -name "*.aab" | head -1)
-          if [ -n "$AAB_PATH" ]; then
-            mv "$AAB_PATH" "build-output/long-take-android-${{ steps.profile.outputs.value }}.aab"
-          fi
+          set -euo pipefail
+          EXT=apk
+          [ "${{ github.event.inputs.profile }}" = "production" ] && EXT=aab
+          eas build:list --platform android --limit 5 --non-interactive --json > builds.json
+          node -e '
+            const fs = require("fs");
+            const builds = JSON.parse(fs.readFileSync("builds.json", "utf8"));
+            const list = Array.isArray(builds) ? builds : [builds];
+            const url = list.map(b => b.artifacts && (b.artifacts.buildUrl || b.artifacts.applicationArchiveUrl))
+                            .find(Boolean);
+            if (!url) { console.error("no artifact url in:", JSON.stringify(list[0] || {}, null, 2)); process.exit(1); }
+            fs.writeFileSync("artifact-url.txt", url);
+            console.log("artifact:", url);
+          '
+          curl -fL "$(cat artifact-url.txt)" \
+            -o "build-output/long-take-${{ steps.version.outputs.value }}-${{ github.event.inputs.profile }}.${EXT}"
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build on this runner
+        if: ${{ github.event.inputs.build_mode == 'local' }}
+        run: |
+          mkdir -p build-output
+          EXT=apk
+          [ "${{ github.event.inputs.profile }}" = "production" ] && EXT=aab
+          eas build \
+            --platform android \
+            --profile ${{ github.event.inputs.profile }} \
+            --local \
+            --non-interactive \
+            --output "build-output/long-take-${{ steps.version.outputs.value }}-${{ github.event.inputs.profile }}.${EXT}"
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GRADLE_OPTS: "-Xmx4g"
+
+      - name: List built artifacts
+        run: ls -la build-output/
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: "Long Take v${{ steps.version.outputs.version }}"
+          tag_name: v${{ steps.version.outputs.value }}
+          name: "Long Take v${{ steps.version.outputs.value }}"
           draft: false
           prerelease: false
           generate_release_notes: true
           files: build-output/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Output build info
-        run: |
-          echo "Build completed successfully!"
-          echo "Version: ${{ steps.version.outputs.version }}"
-          echo "Profile: ${{ steps.profile.outputs.value }}"
-          echo "Mode: ${{ steps.build_mode.outputs.value }}"
-          ls -la build-output/
