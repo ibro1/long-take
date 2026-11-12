@@ -99,19 +99,26 @@ jobs:
           set -euo pipefail
           EXT=apk
           [ "${{ github.event.inputs.profile }}" = "production" ] && EXT=aab
-          eas build:list --platform android --limit 5 --non-interactive --json > builds.json
+          eas build:list --platform android --limit 10 --non-interactive --json > builds.json
           node -e '
             const fs = require("fs");
-            const builds = JSON.parse(fs.readFileSync("builds.json", "utf8"));
-            const list = Array.isArray(builds) ? builds : [builds];
-            const url = list.map(b => b.artifacts && (b.artifacts.buildUrl || b.artifacts.applicationArchiveUrl))
-                            .find(Boolean);
-            if (!url) { console.error("no artifact url in:", JSON.stringify(list[0] || {}, null, 2)); process.exit(1); }
-            fs.writeFileSync("artifact-url.txt", url);
-            console.log("artifact:", url);
+            const raw = JSON.parse(fs.readFileSync("builds.json", "utf8"));
+            const list = Array.isArray(raw) ? raw : [raw];
+            const url = b => b && b.artifacts && (b.artifacts.buildUrl || b.artifacts.applicationArchiveUrl);
+            // This commit\'s build first, then any finished build as a fallback.
+            const mine = list.find(b => b.gitCommitHash === process.env.GITHUB_SHA && url(b));
+            const any = list.find(b => url(b));
+            const pick = mine || any;
+            if (!pick) {
+              console.error("no build carries an artifact:", JSON.stringify(list.map(b => ({ id: b.id, status: b.status })), null, 2));
+              process.exit(1);
+            }
+            console.log("using build", pick.id, pick.status, "commit", pick.gitCommitHash, mine ? "(this commit)" : "(fallback)");
+            fs.writeFileSync("artifact-url.txt", url(pick));
           '
           curl -fL "$(cat artifact-url.txt)" \
             -o "build-output/long-take-${{ steps.version.outputs.value }}-${{ github.event.inputs.profile }}.${EXT}"
+          ls -la build-output/
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
