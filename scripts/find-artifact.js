@@ -18,7 +18,13 @@ if (!pick) {
 }
 
 console.log("using build", pick.id, pick.status, "commit", pick.gitCommitHash, mine ? "(this commit)" : "(fallback)");
-fs.writeFileSync("artifact-url.txt", url(pick));
+const artifactUrl = url(pick);
+let ext = PROFILE === "production" ? "aab" : "apk";
+if (artifactUrl.includes(".aab")) {
+  ext = "aab";
+} else if (artifactUrl.includes(".apk")) {
+  ext = "apk";
+}
 
-const EXT = PROFILE === "production" ? "aab" : "apk";
-fs.writeFileSync("artifact-filename.txt", `long-take-${VERSION}-${PROFILE}.${EXT}`);
+fs.writeFileSync("artifact-url.txt", artifactUrl);
+fs.writeFileSync("artifact-filename.txt", `long-take-${VERSION}-${PROFILE}.${ext}`);

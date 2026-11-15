@@ -20,6 +20,11 @@
       "channel": "production",
       "autoIncrement": true,
       "android": { "buildType": "app-bundle" }
+    },
+    "production-apk": {
+      "channel": "production",
+      "autoIncrement": true,
+      "android": { "buildType": "apk" }
     }
   },
   "submit": {
