@@ -258,14 +258,14 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    */
   internal fun applyThermalLadder(
     bitrateFraction: Double,
-    targetFps: Int,
-    targetResolution: Size?,
+    targetFps: Int = 0,
+    targetResolution: Size? = null,
   ) {
     // Clamp to thermal cap range (0.25 to 1.0)
     val clampedFraction = bitrateFraction.coerceIn(MIN_THERMAL_CAP, 1.0)
     thermalBitrateCap = clampedFraction
 
-    // Apply bitrate cap immediately (works on the fly)
+    // Apply bitrate cap immediately (works on the fly via MediaCodec parameter update)
     applyBitrateCap()
 
     // Track original settings for restoration
@@ -273,33 +273,27 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     if (configuredWidth == 0) configuredWidth = videoWidth
     if (configuredHeight == 0) configuredHeight = videoHeight
 
-    // Reduce fps if specified (requires reconnect)
-    if (targetFps > 0 && targetFps != videoFps) {
-      videoFps = targetFps
-      if (stream.isStreaming) {
-        log(LOG_WARN, "Thermal ladder: fps reduced to $targetFps - reconnecting encoder")
-        reconnect()
+    // NEVER reconnect, restart encoder, or change resolution/fps while actively streaming or recording.
+    // Changing MediaCodec resolution or stopping/restarting encoder breaks the active RTMP/SRT stream.
+    // When off-air, we can update the configured target for the next start.
+    if (!stream.isStreaming && !stream.isRecording) {
+      if (targetFps > 0 && targetFps != videoFps) {
+        videoFps = targetFps
       }
-    }
-
-    // Reduce resolution if specified (requires reconnect)
-    targetResolution?.let { size ->
-      if (size.width != videoWidth || size.height != videoHeight) {
-        videoWidth = size.width
-        videoHeight = size.height
-        if (stream.isStreaming) {
-          log(LOG_WARN, "Thermal ladder: resolution changed to ${size.width}x${size.height} - reconnecting encoder")
-          reconnect()
+      targetResolution?.let { size ->
+        if (size.width != videoWidth || size.height != videoHeight) {
+          videoWidth = size.width
+          videoHeight = size.height
         }
       }
     }
 
-    log(LOG_WARN, "Thermal ladder applied: bitrate ${(clampedFraction * 100).roundToInt()}%, fps $targetFps, res ${targetResolution?.width}x${targetResolution?.height ?: "unchanged"}")
+    log(LOG_INFO, "Thermal ladder applied: bitrate ${(clampedFraction * 100).roundToInt()}%, encoder adapted on the fly")
   }
 
   /**
    * Lift thermal ladder when phone cools down.
-   * Restores full bitrate, fps, and resolution.
+   * Restores full bitrate on the fly without interrupting broadcast.
    */
   internal fun liftThermalLadder() {
     if (thermalBitrateCap >= 1.0) return
@@ -307,27 +301,18 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     thermalBitrateCap = 1.0
     applyBitrateCap()
 
-    var needsReconnect = false
-
-    // Restore original fps if it was reduced
-    if (configuredFps > 0 && videoFps != configuredFps) {
-      videoFps = configuredFps
-      needsReconnect = true
+    // When off-air, restore configured fps and resolution
+    if (!stream.isStreaming && !stream.isRecording) {
+      if (configuredFps > 0 && videoFps != configuredFps) {
+        videoFps = configuredFps
+      }
+      if (configuredWidth > 0 && (videoWidth != configuredWidth || videoHeight != configuredHeight)) {
+        videoWidth = configuredWidth
+        videoHeight = configuredHeight
+      }
     }
 
-    // Restore original resolution if it was reduced
-    if (configuredWidth > 0 && (videoWidth != configuredWidth || videoHeight != configuredHeight)) {
-      videoWidth = configuredWidth
-      videoHeight = configuredHeight
-      needsReconnect = true
-    }
-
-    if (needsReconnect && stream.isStreaming) {
-      log(LOG_INFO, "Thermal ladder lifted: reconnecting to restore fps/resolution")
-      reconnect()
-    } else {
-      log(LOG_INFO, "Thermal ladder fully lifted: bitrate 100%, fps $videoFps, res ${videoWidth}x${videoHeight}")
-    }
+    log(LOG_INFO, "Thermal ladder fully lifted: bitrate 100%, fps $videoFps, res ${videoWidth}x${videoHeight}")
   }
 
   /**
@@ -709,6 +694,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   @Volatile
   private var lastCaptureResultAt = 0L
 
+  @Volatile
+  private var lastExposureEventAt = 0L
+
   /**
    * Frames per second measured from what has actually left the phone.
    *
@@ -1023,8 +1011,14 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     val now = android.os.SystemClock.uptimeMillis()
     val sinceLastFrame = now - lastCaptureResultAt
     if (sinceLastFrame >= frameWatchdogMs) {
-      log(LOG_WARN, "Camera preview frozen - no frames for ${sinceLastFrame}ms; restarting camera")
-      onCameraGone("preview frozen (no frames for ${sinceLastFrame}ms)")
+      if (stream.isStreaming || stream.isRecording) {
+        // While actively broadcasting or recording, NEVER tear down the running camera!
+        // Camera HAL capture callbacks can be delayed or throttled under load while video frames are flowing.
+        log(LOG_WARN, "Camera capture results lagging (${sinceLastFrame}ms); keeping live broadcast running without camera restart")
+      } else {
+        log(LOG_WARN, "Camera preview frozen - no frames for ${sinceLastFrame}ms; restarting camera")
+        onCameraGone("preview frozen (no frames for ${sinceLastFrame}ms)")
+      }
     }
     // Re-arm if camera is still meant to be running
     if (cameraLost || (stream.isStreaming || stream.isRecording || monitoring)) {
@@ -1123,8 +1117,12 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   private fun onCaptureResult(result: android.hardware.camera2.TotalCaptureResult) {
     runCatching {
       val now = android.os.SystemClock.uptimeMillis()
-      if (now - lastCaptureResultAt < EXPOSURE_EVENT_MS) return
+      // Always update frame delivery timestamp on every capture result
       lastCaptureResultAt = now
+
+      // Throttle exposure state bridge events to JavaScript
+      if (now - lastExposureEventAt < EXPOSURE_EVENT_MS) return
+      lastExposureEventAt = now
 
       if (result.get(android.hardware.camera2.CaptureResult.CONTROL_AWB_MODE) ==
         CameraCharacteristics.CONTROL_AWB_MODE_AUTO

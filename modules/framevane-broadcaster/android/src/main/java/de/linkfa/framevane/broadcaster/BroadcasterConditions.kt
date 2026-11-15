@@ -82,38 +82,26 @@ internal fun BroadcasterView.watchThermal() {
     }
 
     /**
-     * AGGRESSIVE THERMAL ADAPTATION: proactively reduce encoder load before
-     * thermal throttling stalls the pipeline.
-     *
-     * The pipeline freezes because CPU/GPU throttling slows GL rendering,
-     * which stalls the shared SurfaceTexture. By reducing bitrate/fps/resolution
-     * EARLY (at LIGHT/MODERATE), we keep the pipeline running within the
-     * throttled thermal budget instead of hitting the wall at SEVERE/CRITICAL.
+     * THERMAL ADAPTATION ON THE FLY:
+     * Proactively reduce video bitrate on the running encoder without reconnecting or
+     * restarting the camera pipeline. Lowering bitrate reduces hardware encoder
+     * throughput and memory bandwidth, cooling the phone while keeping the live
+     * RTMP/SRT stream uninterrupted.
      */
     when (status) {
       PowerManager.THERMAL_STATUS_LIGHT -> {
-        post { applyThermalLadder(0.8, 24, null) } // -20% bitrate, 24fps
+        post { applyThermalLadder(0.8, 0, null) } // -20% bitrate on the fly
       }
       PowerManager.THERMAL_STATUS_MODERATE -> {
-        post { applyThermalLadder(0.6, 20, Size(1280, 720)) } // -40% bitrate, 20fps, 720p
+        post { applyThermalLadder(0.6, 0, null) } // -40% bitrate on the fly
       }
       PowerManager.THERMAL_STATUS_SEVERE -> {
-        post { applyThermalLadder(0.4, 15, Size(1280, 720)) } // -60% bitrate, 15fps, 720p
-        if (!cameraLost) {
-          log(LOG_WARN, "Thermal SEVERE - restarting camera session to clear stalled pipeline")
-          cameraLost = true
-          scheduleCameraRecovery()
-        }
+        post { applyThermalLadder(0.4, 0, null) } // -60% bitrate on the fly
       }
       PowerManager.THERMAL_STATUS_CRITICAL,
       PowerManager.THERMAL_STATUS_EMERGENCY,
       PowerManager.THERMAL_STATUS_SHUTDOWN -> {
-        post { applyThermalLadder(0.25, 10, Size(854, 480)) } // -75% bitrate, 10fps, 480p
-        if (!cameraLost) {
-          log(LOG_WARN, "Thermal ${thermalName(status)} - restarting camera session")
-          cameraLost = true
-          scheduleCameraRecovery()
-        }
+        post { applyThermalLadder(0.25, 0, null) } // -75% bitrate on the fly
       }
       PowerManager.THERMAL_STATUS_NONE -> {
         post { liftThermalLadder() }

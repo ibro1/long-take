@@ -1494,6 +1494,7 @@ export function useBroadcast() {
     resetDrops();
     inBroadcast.current = true;
     reachedAir.current = false;
+    setState("connecting");
     let resumeRecording = false;
     try {
       /**

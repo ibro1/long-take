@@ -39,6 +39,8 @@ import android.os.Looper
  */
 private var routedDeviceId = -1
 private var scoWatcher: BroadcastReceiver? = null
+private var communicationWatcher: Any? = null
+private var linkTimeoutRunnable: Runnable? = null
 
 /**
  * The context [scoWatcher] was registered on, kept with it.
@@ -407,7 +409,7 @@ private fun BroadcasterView.reportAudioInput() {
   // Still waiting on a headset to answer. The line would be true for the
   // second it took to write it, and the reopen that follows will say this
   // properly.
-  if (scoWatcher != null) return
+  if (scoWatcher != null || communicationWatcher != null) return
 
   if (!runCatching { microphone.isRunning() }.getOrDefault(false)) {
     log(LOG_WARN, "The microphone was started and is not running, so the level meter has no input")
@@ -489,6 +491,7 @@ private fun BroadcasterView.acquireAudioRoute() {
   releaseAudioRoute()
 
   val name = nameOf(chosen)
+  var targetSink: AudioDeviceInfo? = null
   val asked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
     /**
      * `setCommunicationDevice` takes an output device and picks the matching
@@ -504,7 +507,18 @@ private fun BroadcasterView.acquireAudioRoute() {
     val match = sinks.firstOrNull {
       address.isNotEmpty() && runCatching { it.address }.getOrNull() == address
     } ?: sinks.firstOrNull { needsBluetoothLink(it.type) }
-    match != null && runCatching { manager.setCommunicationDevice(match) }.getOrDefault(false)
+    targetSink = match
+    if (match != null) {
+      val already = runCatching { manager.communicationDevice }.getOrNull()
+      if (already != null && (already.id == match.id || (address.isNotEmpty() && runCatching { already.address }.getOrNull() == address))) {
+        routedDeviceId = chosen.id
+        routeReopened = false
+        log(LOG_INFO, "$name communication device route is already active; using it immediately")
+        reopenMicrophoneOnRoute()
+        return
+      }
+      runCatching { manager.setCommunicationDevice(match) }.getOrDefault(false)
+    } else false
   } else {
     /**
      * The deprecated pair is the only option below API 31, and the headset
@@ -521,21 +535,38 @@ private fun BroadcasterView.acquireAudioRoute() {
 
   routedDeviceId = chosen.id
   routeReopened = false
-  watchForLink(manager, name)
+  watchForLink(manager, name, targetSink)
 }
 
 /**
  * Waits for the headset to actually answer.
  *
- * The link takes anything from a moment to several seconds, and Android's own
- * instruction is to wait for the broadcast rather than to assume it is up when
- * the call returns. An AudioRecord opened in that gap is aimed at a device with
- * nothing on the other end, which is the silence this whole file is about - so
- * nothing is decided here, it is only noticed, and the microphone is reopened
- * afterwards.
+ * On API 31+, registers OnCommunicationDeviceChangedListener to catch the route
+ * the moment Android connects it (typically <100ms) rather than waiting out a
+ * timeout. For older platforms, waits for ACTION_SCO_AUDIO_STATE_UPDATED.
  */
 @Suppress("DEPRECATION")
-private fun BroadcasterView.watchForLink(manager: AudioManager, name: String) {
+private fun BroadcasterView.watchForLink(manager: AudioManager, name: String, targetSink: AudioDeviceInfo? = null) {
+  val targetAddress = runCatching { targetSink?.address }.getOrNull().orEmpty()
+  val targetId = targetSink?.id ?: -1
+
+  // API 31+ listener triggers immediately when communication device changes
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val commListener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+      if (device != null && (device.id == targetId || needsBluetoothLink(device.type) || (targetAddress.isNotEmpty() && runCatching { device.address }.getOrNull() == targetAddress))) {
+        audioHandler.post {
+          if (communicationWatcher != null || scoWatcher != null) {
+            stopWatchingForLink()
+            log(LOG_INFO, "$name answered via communication device; reopening the microphone on it")
+            reopenMicrophoneOnRoute()
+          }
+        }
+      }
+    }
+    communicationWatcher = commListener
+    runCatching { manager.addOnCommunicationDeviceChangedListener(context.mainExecutor, commListener) }
+  }
+
   val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       if (scoWatcher !== this) return
@@ -549,15 +580,9 @@ private fun BroadcasterView.watchForLink(manager: AudioManager, name: String) {
       if (state != AudioManager.SCO_AUDIO_STATE_CONNECTED) return
       stopWatchingForLink()
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-        /**
-         * A live link is not the same as recording through it below API 31:
-         * the audio policy only prefers the headset's microphone once record
-         * routing has been forced to SCO, and this is the call that forces it.
-         * From 31 the communication device covers both halves.
-         */
         runCatching { manager.setBluetoothScoOn(true) }
       }
-      log(LOG_INFO, "$name answered; reopening the microphone on it")
+      log(LOG_INFO, "$name answered via SCO broadcast; reopening the microphone on it")
       reopenMicrophoneOnRoute()
     }
   }
@@ -572,45 +597,33 @@ private fun BroadcasterView.watchForLink(manager: AudioManager, name: String) {
     }
   }.getOrElse {
     log(LOG_WARN, "Could not wait for $name to answer: ${it.message}")
-    return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    null
   }
   scoWatcher = receiver
   scoWatcherContext = owner
 
-  // A headset that was already carrying audio never changes state, so the
-  // broadcast never comes. Registering returns the state it is in, which is
-  // the only way that case is ever heard about.
   if (sticky != null) receiver.onReceive(context, sticky)
 
-  postDelayed({
-    // Still the receiver that was registered here means nothing has answered;
-    // a link that came up took it down on the way past.
-    if (scoWatcher === receiver) {
+  // Timeout fallback posted on audioHandler (main looper), independent of view lifecycle
+  linkTimeoutRunnable?.let { audioHandler.removeCallbacks(it) }
+  val timeoutRunnable = Runnable {
+    if (scoWatcher === receiver || communicationWatcher != null) {
       stopWatchingForLink()
-      /**
-       * From API 31 the link is opened on this app's behalf rather than by it,
-       * and whether that still comes with the SCO broadcast is the platform's
-       * business and not documented either way. So the selection itself is
-       * asked before anyone is accused: a headset Android says it is using is
-       * a headset that answered, however quietly.
-       */
       val holding = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
         runCatching { manager.communicationDevice?.type }.getOrNull()
           ?.let { needsBluetoothLink(it) } == true
       if (holding) {
-        log(LOG_INFO, "$name answered; reopening the microphone on it")
+        log(LOG_INFO, "$name answered (confirmed on timeout); reopening the microphone on it")
         reopenMicrophoneOnRoute()
       } else {
         log(LOG_WARN, "$name never opened its microphone link; its audio will be silent until it is chosen again")
-        /**
-         * On screen, not only in the log. A headset that never answers is a
-         * flat meter and nothing else - the operator has no way to tell it
-         * from a quiet room, and the banner carries the way out of it.
-         */
         noteAudioSilence(true, "headset")
       }
     }
-  }, LINK_TIMEOUT_MS)
+  }
+  linkTimeoutRunnable = timeoutRunnable
+  audioHandler.postDelayed(timeoutRunnable, LINK_TIMEOUT_MS)
 }
 
 /**
@@ -815,6 +828,19 @@ private fun linkStillHeld(manager: AudioManager, chosen: AudioDeviceInfo): Boole
 }
 
 private fun BroadcasterView.stopWatchingForLink() {
+  linkTimeoutRunnable?.let { audioHandler.removeCallbacks(it) }
+  linkTimeoutRunnable = null
+
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    communicationWatcher?.let { listener ->
+      if (listener is AudioManager.OnCommunicationDeviceChangedListener) {
+        val manager = audioManager
+        runCatching { manager?.removeOnCommunicationDeviceChangedListener(listener) }
+      }
+    }
+    communicationWatcher = null
+  }
+
   val receiver = scoWatcher ?: return
   val owner = scoWatcherContext ?: context.applicationContext ?: context
   scoWatcher = null
@@ -960,4 +986,4 @@ private const val ANNOUNCE_DELAY_MS = 700L
  * point where a headset that was going to answer has, and short of the point
  * where an operator has decided the app is broken and left.
  */
-private const val LINK_TIMEOUT_MS = 6_000L
+private const val LINK_TIMEOUT_MS = 3_000L
