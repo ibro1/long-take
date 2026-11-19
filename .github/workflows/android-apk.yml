@@ -20,6 +20,7 @@ on:
         default: 'production-apk'
         type: choice
         options:
+          - production-apk-arm64
           - production-apk
           - production
           - preview
