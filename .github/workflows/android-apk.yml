@@ -10,6 +10,12 @@ name: Build Android APK
 # it leaves a dirty bun.lock that EAS uploads and then fails to parse.
 #
 # `cloud` builds on EAS servers; `local` builds on this runner (Klipara-style).
+#
+# The default profile is `production-apk-arm64`, not `production-apk`, on
+# purpose. The universal package is 128 MB, of which 96 MB is four sets of
+# native libraries, and Oppo's installer answers it with a bare "Apk error" on a
+# phone that only ever needs arm64. The arm64 build is 57 MB and installs. Keep
+# the universal for emulators and old armeabi-v7a devices only.
 
 on:
   workflow_dispatch:
@@ -17,7 +23,7 @@ on:
       profile:
         description: 'EAS build profile'
         required: false
-        default: 'production-apk'
+        default: 'production-apk-arm64'
         type: choice
         options:
           - production-apk-arm64
