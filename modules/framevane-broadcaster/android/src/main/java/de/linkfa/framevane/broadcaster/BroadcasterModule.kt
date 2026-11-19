@@ -273,6 +273,18 @@ class BroadcasterModule : Module() {
      */
     AsyncFunction("startStream") { url: String ->
       val v = view()
+      /**
+       * A Start has to be a real attempt, every time.
+       *
+       * The guard below used to swallow one: the library keeps `isStreaming`
+       * set from any dial that was abandoned before it opened a socket - a
+       * retry whose timer went with the view, an activity rebuilt mid-handshake
+       * - and this function then did nothing at all and reported nothing. The
+       * screen showed Connecting, the counter stayed on zero, and it never
+       * recovered until the app was force-stopped. Clearing the stranded flag
+       * first is what makes the second press of Go live mean something.
+       */
+      if (v.stream.isStreaming) v.recoverStranded()
       if (!v.stream.isStreaming) {
         if (SUPPORTED_SCHEMES.none { url.startsWith("$it://", ignoreCase = true) }) {
           throw UnsupportedDestinationException()

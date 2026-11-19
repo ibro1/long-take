@@ -90,6 +90,15 @@ export const ANTI_FLICKER_AUTO = 3;
 export function useBroadcast() {
   const [state, setState] = useState<BroadcastState>("idle");
   const [detail, setDetail] = useState("");
+  /**
+   * Seconds the screen has been saying "Connecting".
+   *
+   * The screen drew nothing at all for this, so a dial that hung looked exactly
+   * like a dial that was working: the uptime counter sat on zero and never
+   * moved. It is the operator's only evidence that anything is still happening.
+   */
+  const [connectingFor, setConnectingFor] = useState(0);
+  const connectAttemptId = useRef(0);
   const [muted, setMuted] = useState(false);
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
   const [charge, setCharge] = useState<PowerState>({ level: 1, charging: false });
@@ -1495,6 +1504,32 @@ export function useBroadcast() {
     inBroadcast.current = true;
     reachedAir.current = false;
     setState("connecting");
+    /**
+     * A Start is a real attempt, so anything the encoder is still claiming is
+     * cleared first.
+     *
+     * RootEncoder keeps `isStreaming` set from any connection that was
+     * abandoned before it opened a socket, and a native start while that flag
+     * stands does nothing at all and reports nothing: the screen then says
+     * Connecting with the counter on zero and stays there until the app is
+     * force-stopped. Asking the encoder to stop first is what makes pressing Go
+     * live again mean something. Only when nothing went out - a broadcast that
+     * did reach air is the operator's to keep or end, not this.
+     */
+    try {
+      if (isStreamingNow() && !reachedAir.current) {
+        await Broadcaster.stopStream();
+        pushLog({
+          at: Date.now(),
+          level: "warn",
+          message:
+            "The encoder was still holding a connection that never went live, so it was " +
+            "cleared before this attempt.",
+        });
+      }
+    } catch {
+      // Nothing to clear, or nothing to clear it with; the start below reports.
+    }
     let resumeRecording = false;
     try {
       /**
@@ -1608,6 +1643,59 @@ export function useBroadcast() {
      */
     await Broadcaster.monitorAudio(true).catch(() => {});
   }, []);
+
+  /**
+   * The connecting clock, and the last resort behind the encoder's own.
+   *
+   * A broadcast that has not connected is not live, and a screen saying
+   * Connecting with its counter on zero looks exactly like one that is working.
+   * Two things follow from that: the clock runs, so an operator can see the
+   * attempt is still going and for how long; and past [CONNECT_SILENCE_MS] the
+   * attempt is ended with a reason instead of being left hanging.
+   *
+   * The native side times a dial out at thirty seconds, so reaching this one
+   * means the encoder never answered at all - which is precisely the silent
+   * no-op that used to strand the screen. Ending it through `stop` is also what
+   * clears the encoder's own stale `isStreaming`, so the next press of Go live
+   * works without the app being force-stopped.
+   *
+   * `connectAttemptId` guards against a timer that outlived its broadcast: a
+   * state change re-runs this effect and the cleanup clears the interval, but
+   * the awaited stop below can land after a newer broadcast has already begun.
+   */
+  useEffect(() => {
+    if (state !== "connecting") {
+      setConnectingFor(0);
+      return;
+    }
+    const beganAt = Date.now();
+    const mine = (connectAttemptId.current += 1);
+    setConnectingFor(0);
+    const timer = setInterval(() => {
+      const seconds = Math.floor((Date.now() - beganAt) / 1000);
+      setConnectingFor(seconds);
+      if (seconds * 1000 < CONNECT_SILENCE_MS) return;
+      clearInterval(timer);
+      pushLog({
+        at: Date.now(),
+        level: "error",
+        message:
+          `The encoder said nothing for ${Math.round(CONNECT_SILENCE_MS / 1000)}s of trying to ` +
+          "connect, so the attempt was ended.",
+      });
+      void (async () => {
+        if (connectAttemptId.current !== mine) return;
+        await stop().catch(() => {});
+        if (connectAttemptId.current !== mine) return;
+        setState("failed");
+        setDetail(
+          "No answer from the encoder while connecting, so the attempt was ended. " +
+            "Press Go live to try again.",
+        );
+      })();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [state, stop]);
 
   /**
    * Read every half minute, and every five seconds while live. A battery does
@@ -1734,6 +1822,7 @@ export function useBroadcast() {
   return {
     state,
     detail,
+    connectingFor,
     reconnects,
     lastDrop,
     lostAir,
@@ -1883,3 +1972,15 @@ export function formatUptime(seconds: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
+
+/**
+ * The longest the screen will say "Connecting" with nothing at all from the
+ * encoder.
+ *
+ * The native side times a dial out at thirty seconds and reports the failure,
+ * so this sits behind that, for the case it was written against: a start that
+ * returned as though it had worked and then said nothing ever again. Forty-five
+ * leaves the native watchdog room to speak first, and still ends the attempt in
+ * under a minute instead of never.
+ */
+const CONNECT_SILENCE_MS = 45_000;

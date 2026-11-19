@@ -331,6 +331,7 @@ export default function BroadcastScreen() {
   const {
     state,
     detail,
+    connectingFor,
     reconnects,
     lastDrop,
     lostAir,
@@ -1491,7 +1492,15 @@ export default function BroadcastScreen() {
         : badgeState === "paused"
           ? t("hud.paused")
           : badgeState === "connecting"
-            ? t("hud.connecting")
+            ? /**
+               * The clock, not just the word. A dial that hung and a dial that
+               * was working drew the same badge and the same frozen zero, so
+               * there was no way to tell a broadcast about to go live from one
+               * that never would.
+               */
+              connectingFor > 0
+              ? `${t("hud.connecting")} ${connectingFor}s`
+              : t("hud.connecting")
             : t("hud.offAir");
 
   /**

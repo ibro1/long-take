@@ -157,6 +157,37 @@ class BroadcasterView(context: Context, appContext: AppContext) :
   private var lastFailure = ""
 
   /**
+   * When the dial that is up went out, and the watchdog that refuses to let it
+   * hang there for ever.
+   *
+   * A handshake that never settles used to be indistinguishable from one still
+   * in progress: no event, no failure, no end. The screen sat on "Connecting"
+   * with its counter on zero, nothing ever moved it, and the only thing that
+   * cleared it was force-stopping the app - which is exactly what was reported
+   * from the field, twice, against a broadcast that had worked the same day.
+   *
+   * Armed on the first dial of a broadcast and re-armed by nothing: a retry is
+   * the same dial continuing, so the clock that matters is how long since
+   * anything was hoped for, not how long since this attempt began. Disarmed
+   * when a connection succeeds, and when one is given up on.
+   */
+  private var dialStartedAt = 0L
+  // Runs on the audio handler itself, which is the main looper: a watchdog
+  // posted through the view would be queued behind its attachment, and the view
+  // being detached is one of the ways a dial gets abandoned in the first place.
+  private val connectWatchdog = Runnable { onDialExpired() }
+
+  /**
+   * The last state the screen was told.
+   *
+   * Read by [recoverStranded] to tell a broadcast that is live from an encoder
+   * that is only holding a flag. Written from the encoder's own threads, which
+   * is why it is volatile.
+   */
+  @Volatile
+  private var lastState = "idle"
+
+  /**
    * The picture the encoder was last actually built with, or null if the last
    * attempt to build it was refused.
    *
@@ -2891,6 +2922,7 @@ class BroadcasterView(context: Context, appContext: AppContext) :
    * order they happened, which they were not.
    */
   private fun status(state: String, detail: String? = null) {
+    lastState = state
     /**
      * The retry this is, on every status, so the screen can count the attempts
      * a broadcast has needed. Two events arrive per attempt - the failure and
@@ -2927,9 +2959,100 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     lastFailure = ""
     connectedAt = 0L
     shortLivedConnections = 0
+    dialStartedAt = System.currentTimeMillis()
+    armConnectWatchdog()
     runCatching { stream.getStreamClient().setReTries(RETRIES) }.onFailure {
       log(LOG_WARN, "Could not set the reconnect budget: ${it.message}")
     }
+  }
+
+  /**
+   * Starts the clock on a dial that has to settle within [CONNECT_GIVE_UP_MS].
+   *
+   * On the audio handler rather than the view: the view can be detached while a
+   * connection is being dialled - the operator switches app, the activity is
+   * rebuilt - and a watchdog posted to a detached view never runs at all.
+   */
+  private fun armConnectWatchdog() {
+    audioHandler.removeCallbacks(connectWatchdog)
+    audioHandler.postDelayed(connectWatchdog, CONNECT_GIVE_UP_MS)
+  }
+
+  private fun disarmConnectWatchdog() {
+    audioHandler.removeCallbacks(connectWatchdog)
+  }
+
+  /**
+   * The dial took too long, so it is finished here and said out loud.
+   *
+   * Only before the first success: after one, a broadcast is live and dialling
+   * back in is the reconnect ladder's job, which the operator can already see
+   * and already has a reason for. Before one, nothing has gone out, the
+   * broadcast is not live, and waiting for ever is not patience - it is a
+   * screen saying "Connecting" that will never say anything else.
+   *
+   * This is also the only thing that reliably clears the library's own
+   * `isStreaming`, which it sets when `startStream` is called - before it has
+   * opened anything - and clears only in `stopStream`. A flag left set makes
+   * every later Start a silent no-op: the call returns as though it worked, no
+   * connection event is ever sent, and the counter stays on zero until the
+   * process is killed.
+   */
+  private fun onDialExpired() {
+    if (connectedOnce || !stream.isStreaming) return
+    val waited = ((System.currentTimeMillis() - dialStartedAt) / 1000).coerceAtLeast(1)
+    val why = "The server did not accept the broadcast in ${CONNECT_GIVE_UP_MS / 1000}s" +
+      if (lastFailure.isEmpty()) {
+        " and nothing came back from the far end"
+      } else {
+        " (last answer: $lastFailure)"
+      }
+    log(
+      LOG_ERROR,
+      "Gave up on the connection after ${waited}s; nothing has been sent to the destination",
+    )
+    failedJustNow = true
+    runCatching { stream.stopStream() }
+    markUnprepared()
+    connectedAt = 0L
+    lastFailure = why
+    status("failed", why)
+    val wasUnwatched = BroadcastService.isRunning
+    syncBackgroundService()
+    if (wasUnwatched) {
+      runCatching { BroadcastService.alertEnded(context, why) }
+    }
+    restoreMonitor()
+  }
+
+  /**
+   * Clears a broadcast flag that no connection is holding, and says whether it
+   * had to.
+   *
+   * RootEncoder sets `isStreaming` the moment `startStream` is called and only
+   * `stopStream` puts it back, so every path that abandons a dial leaves the
+   * flag standing: a retry whose timer went with the view, an activity rebuilt
+   * mid-handshake, a service torn down under a connection that was still
+   * opening. The next Start then finds `isStreaming` true, does nothing at all,
+   * and reports nothing - the reported "Connecting, counter on zero, not live,
+   * force-stop the app to fix it".
+   *
+   * A broadcast that has ever reached air is left alone: that flag is the truth
+   * and stopping it is the operator's End, not this.
+   */
+  internal fun recoverStranded(): Boolean {
+    if (!stream.isStreaming) return false
+    if (connectedOnce || lastState == "connected") return false
+    log(
+      LOG_WARN,
+      "The encoder was still holding a connection that never went live; " +
+        "clearing it so this attempt is a real one",
+    )
+    runCatching { stream.stopStream() }
+    markUnprepared()
+    setCurrentDestinationUrl(null)
+    disarmConnectWatchdog()
+    return true
   }
 
   override fun onConnectionStarted(url: String) {
@@ -2974,6 +3097,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
     connectedOnce = true
     lastFailure = ""
     healthyTicks = 0
+    // The dial settled. Nothing left to time out.
+    disarmConnectWatchdog()
     // A connection that worked earns a fresh ladder: the next outage is a new
     // outage and should not inherit a thirty-second delay from the last one.
     reconnectAttempt = 0
@@ -3046,6 +3171,9 @@ class BroadcasterView(context: Context, appContext: AppContext) :
      */
     failedJustNow = true
     runCatching { stream.stopStream() }
+    // Given up on, so nothing is left to time out - and no watchdog may fire
+    // behind this and report a second end for the same broadcast.
+    disarmConnectWatchdog()
     status("failed", why)
     /**
      * Read before the service is torn down, because that is the question being
@@ -3157,6 +3285,8 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
   override fun onDisconnect() {
     log(LOG_INFO, "Disconnected")
+    // Nothing is being dialled any more, whatever ended it.
+    disarmConnectWatchdog()
     /**
      * Not after a failure. Closing out a failed connection ends in this
      * callback too, a moment later - and "disconnected" with no detail
@@ -3322,6 +3452,18 @@ class BroadcasterView(context: Context, appContext: AppContext) :
 
     /** Short-lived connections in a row before the broadcast is ended. */
     private const val MAX_SHORT_LIVED = 5
+
+    /**
+     * How long a dial may go unsettled before it is called a failure.
+     *
+     * Thirty seconds, and it is a ceiling on the whole dial rather than on one
+     * attempt: the retry ladder is re-dialling the same broadcast, and a phone
+     * that has not got in after half a minute has not got in. Every working
+     * connection seen from the field - RTMP to the studio, SRT to the same -
+     * settles in one to five. Past that the operator is owed a reason and a
+     * button, not a spinner that never resolves.
+     */
+    private const val CONNECT_GIVE_UP_MS = 30_000L
 
     /** Said on the banner and the lock screen when the above gives up. */
     private const val FLAPPING_REASON =
