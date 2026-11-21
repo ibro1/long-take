@@ -1743,6 +1743,22 @@ export default function BroadcastScreen() {
       <OverlaysPanel connection={connection} onClose={closePanel} />
     ) : panel === "mic" ? (
       <Panel title="Where the sound comes from" onClose={closePanel}>
+        {/*
+          The switch that ends the sound, first because it is the one thing here
+          that takes effect on every destination whatever else is chosen - a
+          microphone picked a row too low is still a broadcast with sound in it,
+          and someone who needs silence needs it now, not after scrolling.
+        */}
+        <Toggle
+          label="Microphone on air"
+          hint={
+            muted
+              ? "Off: this broadcast is sending silence, whatever is chosen below."
+              : "On: the input below is what goes out."
+          }
+          on={!muted}
+          onPress={muteWithTick}
+        />
         <Row
           label="Let Android choose"
           selected={audioDevices.every((device) => !device.current)}
@@ -2119,36 +2135,42 @@ export default function BroadcastScreen() {
     />
   );
 
-  /** Mic: tap mutes, holding opens the input list (chosen beforehand, not mid-shot). */
+  /**
+   * Mic: the ring opens the input list, and the words below it only say what is
+   * chosen.
+   *
+   * The ring used to mute on a tap and hide the list behind a long press, which
+   * put two jobs on one small target and gave the more dangerous one the easier
+   * gesture: a thumb resting on the ring silenced a broadcast, while the thing
+   * anyone actually wants mid-setup - change the microphone - was invisible
+   * unless they happened to hold it down. Muting still exists, on a switch
+   * inside the panel, where it can be read and undone in the same glance.
+   *
+   * The ring keeps the off state, because that is a fact about the broadcast
+   * and it has to be visible without opening anything.
+   */
   const micControl = (
     <View pointerEvents="box-none" className="items-center gap-1">
       <RingButton
         icon={muted ? MicOffIcon : MicIcon}
-        label={muted ? t("control.muted") : t("control.mute")}
+        label={t("mic.chipA11y", {
+          name: audioInput ? describeAudioInput(audioInput) : t("mic.androidChoice"),
+        })}
         active={muted}
         tone="alert"
-        onPress={muteWithTick}
-        onLongPress={micChoices.length > 0 ? () => togglePanel("mic") : undefined}
+        onPress={() => togglePanel("mic")}
       />
       {micChoices.length > 0 ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t("mic.chipA11y", {
-            name: audioInput ? describeAudioInput(audioInput) : t("mic.androidChoice"),
-          })}
-          accessibilityState={{ expanded: panel === "mic" }}
-          onPress={() => togglePanel("mic")}
-          hitSlop={6}
-          className="max-w-[104px] px-1 py-0.5 active:opacity-60"
-        >
+        /* A label now, not a button: the ring above it is the way in. */
+        <View pointerEvents="none" className="max-w-[104px] px-1 py-0.5">
           <Text
             numberOfLines={1}
             maxFontSizeMultiplier={HUD_TEXT}
-            className={`text-[10px] ${panel === "mic" ? "text-filmic-accent" : "text-filmic-inkmuted"}`}
+            className="text-center text-[10px] text-filmic-inkmuted"
           >
             {micLabel}
           </Text>
-        </Pressable>
+        </View>
       ) : null}
     </View>
   );

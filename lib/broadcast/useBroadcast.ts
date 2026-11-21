@@ -977,6 +977,14 @@ export function useBroadcast() {
       savePreferences({ audioDeviceId: id });
       try {
         await Broadcaster.selectAudioDevice(id);
+        /**
+         * Mute is a fact about the broadcast, not about the microphone that
+         * happened to be open when it was set. Choosing another input reopens
+         * the recorder off air, and a switch that reads "off" over a source
+         * that came back talking is the worst of both answers - so it is put
+         * back, every time, wherever it was.
+         */
+        if (muted) await Broadcaster.setMuted(true).catch(() => {});
       } catch (error) {
         notify(
           error instanceof Error && error.message
@@ -986,7 +994,7 @@ export function useBroadcast() {
         );
       }
     },
-    [notify],
+    [notify, muted],
   );
 
   /**
