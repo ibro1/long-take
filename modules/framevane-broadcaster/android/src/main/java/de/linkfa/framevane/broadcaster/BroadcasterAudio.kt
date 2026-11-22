@@ -246,7 +246,25 @@ internal fun chooseAudioDevice(context: Context, id: Int) {
    * which is what the screen says happens.
    */
   val view = BroadcasterView.current ?: return
-  view.applyAudioChoice(device)
+
+  /**
+   * The choice is acknowledged at once and the work that takes time happens
+   * behind it.
+   *
+   * Picking an input stops the recorder and opens it again on the new device,
+   * and opening an AudioRecord is not instant - worse on a phone that is hot
+   * and worst on a Bluetooth headset, whose link has to come up first. All of
+   * that used to run inside the module call, so the promise did not resolve
+   * until the work finished: the row sat on "connecting..." for seconds, every
+   * further tap queued behind it, and the panel read as frozen. The operator's
+   * choice is cheap to store, and it is the choice they are waiting for, so it
+   * is made now and the recorder is moved on the main thread afterwards.
+   *
+   * The report before the move is what stops the row looking dead: it says the
+   * choice was taken, and the move reports again when the device is really on.
+   */
+  view.reportAudioDevices()
+  audioHandler.post { runCatching { view.applyAudioChoice(device) } }
 }
 
 /**

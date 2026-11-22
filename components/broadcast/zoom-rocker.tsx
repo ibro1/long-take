@@ -169,6 +169,10 @@ export function ZoomRocker(props: {
 
   const gesture = useMemo(() => {
     const pan = Gesture.Pan()
+      // The same forgiving margin the reticles take: the rocker is a strip
+      // beside a moving picture, and a thumb that misses it reads as a rocker
+      // that has stopped working.
+      .hitSlop({ left: 16, right: 16, top: 12, bottom: 12 })
       .activeOffsetY([-4, 4])
       .onStart(() => {
         dragging.value = true;

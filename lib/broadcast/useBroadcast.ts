@@ -1706,6 +1706,43 @@ export function useBroadcast() {
   }, [state, stop]);
 
   /**
+   * Whether the screen's JavaScript thread is keeping up, said out loud in the
+   * log while it matters.
+   *
+   * Reported from the field: on a phone that has been broadcasting a while, and
+   * is hot, the reticles stop answering a drag and the microphone list stops
+   * answering a tap - then everything is fine again in a fresh process. Both of
+   * those are the same shape of failure: work that is queued behind a stalled
+   * thread. The picture and the encoder are native and carry on regardless, so
+   * from the outside it looks like two unrelated controls going deaf at once.
+   *
+   * A timer that cannot fire on time is the cheapest honest measure of that.
+   * Nothing here changes behaviour - it only means that when it happens again
+   * the log says whether the thread was starved, which is the difference
+   * between a bug in this app and a phone that has throttled it.
+   */
+  useEffect(() => {
+    if (!live && !recording) return;
+    let due = Date.now() + LAG_PROBE_MS;
+    let reportedAt = 0;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const late = now - due;
+      due = now + LAG_PROBE_MS;
+      if (late < LAG_REPORT_MS || now - reportedAt < LAG_QUIET_MS) return;
+      reportedAt = now;
+      pushLog({
+        at: now,
+        level: "warn",
+        message: `The screen fell ${late}ms behind while ${
+          live ? "on air" : "recording"
+        } - controls queue behind that, the broadcast does not.`,
+      });
+    }, LAG_PROBE_MS);
+    return () => clearInterval(timer);
+  }, [live, recording]);
+
+  /**
    * Read every half minute, and every five seconds while live. A battery does
    * not move fast enough to watch, but an encoder, a radio and a lit screen
    * together empty one quickly enough that an operator wants to see it going.
@@ -1992,3 +2029,12 @@ export function formatUptime(seconds: number): string {
  * under a minute instead of never.
  */
 const CONNECT_SILENCE_MS = 45_000;
+
+/** How often the lag probe wakes, and what counts as late. */
+const LAG_PROBE_MS = 500;
+
+/** Half a second behind is a thread that is not keeping up, not a slow frame. */
+const LAG_REPORT_MS = 500;
+
+/** One line per ten seconds at most; a starved thread would otherwise flood the log. */
+const LAG_QUIET_MS = 10_000;

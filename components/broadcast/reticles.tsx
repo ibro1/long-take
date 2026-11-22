@@ -53,6 +53,18 @@ const TOUCH = 88;
 /** Half the drawing: how far a centre must stay from the chrome. */
 const HALF = DRAW / 2;
 
+/**
+ * What a gesture will still accept outside the box it is attached to.
+ *
+ * The box is already larger than the drawing, but a thumb arriving on a moving
+ * picture - on a phone that is warm, held one-handed, with the other hand
+ * working the shutter - lands where it lands. A puck that only answers a touch
+ * inside its own 88dp box reads as a puck that does not answer at all, and the
+ * operator's conclusion is that dragging stopped working. The margin costs
+ * nothing and the topmost puck still wins where the two overlap.
+ */
+const GRAB = { left: 18, right: 18, top: 18, bottom: 18 };
+
 const STROKE = 2.2;
 
 /** A soft dark under-stroke so the amber reads over a bright sky or a white wall. */
@@ -380,6 +392,7 @@ export function Reticles({
 
       const pan = Gesture.Pan()
         .enabled(enabled)
+        .hitSlop(GRAB)
         .onStart(() => {
           // A locked puck never moves, and a pair moves only if neither half is
           // held. Decided once here so a drag cannot change its mind halfway.
@@ -465,6 +478,7 @@ export function Reticles({
       // cancel a drag that starts after a pause.
       const split = Gesture.LongPress()
         .enabled(enabled && pairable)
+        .hitSlop(GRAB)
         .minDuration(SPLIT_HOLD_MS)
         .maxDistance(10)
         .onTouchesDown((_e, manager) => {
@@ -494,6 +508,7 @@ export function Reticles({
       // Home, and freed: the way back from a puck parked somewhere unhelpful.
       const home = Gesture.Tap()
         .enabled(enabled)
+        .hitSlop(GRAB)
         .numberOfTaps(2)
         .maxDelay(DOUBLE_TAP_MS)
         .maxDistance(10)
@@ -529,6 +544,7 @@ export function Reticles({
 
       const tap = Gesture.Tap()
         .enabled(enabled)
+        .hitSlop(GRAB)
         .maxDistance(10)
         .onEnd((_e, success) => {
           if (!success) return;
